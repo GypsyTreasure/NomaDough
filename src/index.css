@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body {
+    background: #0a0a0a;
+    color: #f0f0f0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    height: 100%;
+    overflow: hidden;
+  }
+
+  #root {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+
+  input[type="range"] {
+    accent-color: #00ff00;
+  }
+
+  input[type="number"] {
+    background: #141414;
+    border: 1px solid #222;
+    color: #f0f0f0;
+    border-radius: 6px;
+    padding: 4px 8px;
+    outline: none;
+    width: 100%;
+  }
+
+  input[type="number"]:focus {
+    border-color: #00ff00;
+    box-shadow: 0 0 0 2px rgba(0,255,0,0.12);
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #00ff00;
+  }
+}
