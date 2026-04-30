@@ -4,6 +4,8 @@ import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
 
 export default defineConfig({
+  // GitHub Pages serves from /NomaDough/ — set base accordingly
+  base: process.env.NODE_ENV === 'production' ? '/NomaDough/' : '/',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
