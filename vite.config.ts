@@ -13,7 +13,9 @@ export default defineConfig({
     },
   },
   worker: {
-    format: 'es',
+    // iife bundles all imports into the worker file and enables importScripts()
+    // which is required for loading OpenCV.js in the CV worker
+    format: 'iife',
   },
   optimizeDeps: {
     exclude: ['opencv.js'],
