@@ -1,94 +1,69 @@
-import { useGeometryStore } from '../../store/useGeometryStore'
-import { useAppStore } from '../../store/useAppStore'
-import { exportSTL } from '../../utils/exporter'
+import { useStore } from '../../store/useStore'
+import { exportSTL } from '../../utils/geometry'
 import { Download } from 'lucide-react'
 
-// Inline logo: white text, #00ff00 green dot, no background rect
-function NomaDirLogo({ height = 26 }: { height?: number }) {
+// Inline SVG logo inspired by nd-logo-transparent.svg — white text, bright green dot
+function NomaDirLogo() {
   return (
-    <svg
-      viewBox="0 0 282 56"
-      height={height}
-      aria-label="NomaDirection"
-      style={{ display: 'block' }}
-    >
-      <text
-        x="0" y="42"
-        fontFamily="'Barlow','Arial',sans-serif"
-        fontSize="38"
-        fill="#ffffff"
-        letterSpacing="-0.5"
-      >
-        <tspan fontWeight="300">Noma</tspan>
-        <tspan fontWeight="500">Direction</tspan>
+    <svg viewBox="0 0 240 44" height="22" aria-label="NomaDough by NomaDirection" style={{ display:'block', flexShrink:0 }}>
+      <text x="0" y="32" fontFamily="system-ui,'Segoe UI',sans-serif" fontSize="30" fill="#ffffff" letterSpacing="-0.5">
+        <tspan fontWeight="300">Noma</tspan><tspan fontWeight="700" fill="#00ff00">Dough</tspan>
       </text>
-      <circle cx="268" cy="37" r="6" fill="#00ff00" />
+      <circle cx="232" cy="26" r="5" fill="#00ff00" />
     </svg>
   )
 }
 
 export function TopNav() {
-  const { exportReady, mesh } = useGeometryStore()
-  const { imageContext } = useAppStore()
+  const { phase, geometry, fileNameBase } = useStore()
+  const canExport = phase === 'ready' && geometry != null
 
   const handleExport = () => {
-    if (!mesh || !exportReady) return
-    exportSTL(mesh, imageContext.fileNameBase)
+    if (!geometry) return
+    exportSTL(geometry, fileNameBase)
   }
 
   return (
     <header style={{
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      padding: '0 20px',
-      height: '52px',
-      background: '#0d0d0d',
-      borderBottom: '1px solid #181818',
-      flexShrink: 0,
-      zIndex: 10,
+      display:'flex', alignItems:'center', justifyContent:'space-between',
+      padding:'0 20px', height:'52px', flexShrink:0,
+      background:'#0c0c0c', borderBottom:'1px solid #181818',
     }}>
-      {/* Logo */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-        <NomaDirLogo height={22} />
-        <div style={{ width: '1px', height: '18px', background: '#1e1e1e' }} />
-        <span style={{ color: '#444', fontSize: '12px', letterSpacing: '0.3px' }}>
-          NomaDough
+      {/* Brand */}
+      <a
+        href="https://nomadirection.pl"
+        target="_blank"
+        rel="noopener noreferrer"
+        style={{ display:'flex', alignItems:'center', gap:'10px', textDecoration:'none' }}
+      >
+        <NomaDirLogo />
+        <span style={{ color:'#2a2a2a', fontSize:'10px', letterSpacing:'1.5px', textTransform:'uppercase', marginTop:'1px' }}>
+          by NomaDirection
         </span>
-      </div>
+      </a>
 
-      {/* Title — hidden on small screens */}
-      <span style={{
-        color: '#2e2e2e',
-        fontSize: '11px',
-        letterSpacing: '2px',
-        textTransform: 'uppercase',
-      }}>
+      {/* Sub-title */}
+      <span style={{ color:'#252525', fontSize:'10px', letterSpacing:'2px', textTransform:'uppercase' }}>
         3D Cookie Cutter Generator
       </span>
 
-      {/* Export button */}
+      {/* Export */}
       <button
         onClick={handleExport}
-        disabled={!exportReady}
+        disabled={!canExport}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '7px',
-          padding: '7px 16px',
-          background: exportReady ? '#00ff00' : '#111',
-          color: exportReady ? '#000' : '#333',
-          border: `1px solid ${exportReady ? '#00ff00' : '#1e1e1e'}`,
-          borderRadius: '6px',
-          cursor: exportReady ? 'pointer' : 'not-allowed',
-          fontSize: '12px',
-          fontWeight: 700,
-          transition: 'all 0.2s',
-          letterSpacing: '0.3px',
-          boxShadow: exportReady ? '0 0 12px rgba(0,255,0,0.25)' : 'none',
+          display:'flex', alignItems:'center', gap:'7px',
+          padding:'7px 18px',
+          background: canExport ? '#00ff00' : '#101010',
+          color: canExport ? '#000' : '#2a2a2a',
+          border:`1px solid ${canExport ? '#00ff00' : '#1a1a1a'}`,
+          borderRadius:'6px',
+          fontSize:'12px', fontWeight:700, letterSpacing:'0.4px',
+          cursor: canExport ? 'pointer' : 'not-allowed',
+          transition:'all .2s',
+          boxShadow: canExport ? '0 0 14px #00ff0044' : 'none',
+          animation: canExport ? 'glow 2.5s ease-in-out infinite' : 'none',
         }}
-        onMouseEnter={(e) => { if (exportReady) e.currentTarget.style.boxShadow = '0 0 20px rgba(0,255,0,0.4)' }}
-        onMouseLeave={(e) => { if (exportReady) e.currentTarget.style.boxShadow = '0 0 12px rgba(0,255,0,0.25)' }}
       >
         <Download size={13} />
         Eksportuj STL

@@ -1,29 +1,29 @@
 import { useRef, useEffect } from 'react'
 import * as THREE from 'three'
-import { useGeometryStore } from '../../store/useGeometryStore'
+import { useStore } from '../../store/useStore'
 
 export function Model() {
-  const { mesh } = useGeometryStore()
-  const groupRef = useRef<THREE.Group>(null)
+  const { geometry } = useStore()
+  const ref = useRef<THREE.Group>(null)
 
   useEffect(() => {
-    if (!groupRef.current || !mesh) return
-    // Center geometry to world origin so OrbitControls targets correctly
-    mesh.computeBoundingBox()
+    if (!ref.current || !geometry) return
+    geometry.computeBoundingBox()
     const center = new THREE.Vector3()
-    mesh.boundingBox!.getCenter(center)
-    groupRef.current.position.set(-center.x, -center.y, -center.z)
-  }, [mesh])
+    geometry.boundingBox!.getCenter(center)
+    // Keep the base at Y=0 — only center on X and Z
+    ref.current.position.set(-center.x, 0, -center.z)
+  }, [geometry])
 
-  if (!mesh) return null
+  if (!geometry) return null
 
   return (
-    <group ref={groupRef}>
-      <mesh geometry={mesh} castShadow receiveShadow>
+    <group ref={ref}>
+      <mesh geometry={geometry} castShadow receiveShadow>
         <meshStandardMaterial
-          color="#00ee77"
-          roughness={0.25}
-          metalness={0.15}
+          color="#00dd66"
+          roughness={0.2}
+          metalness={0.1}
           side={THREE.DoubleSide}
         />
       </mesh>

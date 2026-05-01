@@ -1,50 +1,57 @@
+// ─── Settings ───────────────────────────────────────────────────────────────
+
 export interface CutterProfile {
-  a: number; // Top width (mm) - Default: 0.2
-  b: number; // Base width (mm) - Default: 3.0
-  c: number; // Height (mm) - Default: 12.0
+  a: number   // Cutting edge width (mm) – default 0.2
+  b: number   // Base width (mm) – default 3.0
+  c: number   // Wall height (mm) – default 12.0
 }
 
 export interface BridgeProfile {
-  s: number; // Width (mm) - Default: 3.0
-  w: number; // Height from base (mm) - Default: 2.0
+  s: number   // Bridge width (mm) – default 3.0
+  w: number   // Bridge height (mm) – default 2.0
 }
 
 export interface AppSettings {
-  sketchHeightMm: number;
-  cutterProfile: CutterProfile;
-  bridgeProfile: BridgeProfile;
+  sketchHeightMm: number
+  cutterProfile: CutterProfile
+  bridgeProfile: BridgeProfile
 }
 
-export interface ImageContext {
-  file: File | null;
-  fileNameBase: string;
-  originalUrl: string | null;
-  processedVectorPaths: Array<Array<{ x: number; y: number }>>;
+// ─── App state machine ───────────────────────────────────────────────────────
+
+export type AppPhase =
+  | 'idle'
+  | 'cv-loading'
+  | 'preview'
+  | 'geo-loading'
+  | 'ready'
+  | 'error'
+
+// ─── Worker messages ─────────────────────────────────────────────────────────
+
+export interface CVWorkerInput {
+  imageData: ImageData
+  targetHeightMm: number
 }
 
-export interface GeometryState {
-  isGenerating: boolean;
-  progress: number;
-  meshData: Float32Array | null;
-  exportReady: boolean;
-}
-
-export interface CVWorkerPayload {
-  imageData: ImageData;
-  targetHeightMm: number;
-}
-
-export interface GeometryWorkerPayload {
-  paths: Array<Array<{ x: number; y: number }>>;
-  settings: AppSettings;
+export interface CVWorkerResult {
+  paths: Array<Array<{ x: number; y: number }>>        // mm-scaled
+  rawPaths: Array<Array<{ x: number; y: number }>>     // pixel coordinates
+  imageWidth: number
+  imageHeight: number
 }
 
 export type CVWorkerMessage =
   | { type: 'progress'; value: number }
-  | { type: 'result'; paths: Array<Array<{ x: number; y: number }>> }
-  | { type: 'error'; message: string };
+  | { type: 'result' } & CVWorkerResult
+  | { type: 'error'; message: string }
 
-export type GeometryWorkerMessage =
+export interface GeoWorkerInput {
+  paths: Array<Array<{ x: number; y: number }>>
+  settings: AppSettings
+}
+
+export type GeoWorkerMessage =
   | { type: 'progress'; value: number }
   | { type: 'result'; buffer: ArrayBuffer }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }

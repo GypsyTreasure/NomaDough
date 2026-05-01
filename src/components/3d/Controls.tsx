@@ -4,13 +4,10 @@ export function Controls() {
   return (
     <OrbitControls
       makeDefault
-      enablePan={true}
-      enableZoom={true}
-      enableRotate={true}
-      dampingFactor={0.08}
-      enableDamping={true}
-      rotateSpeed={0.7}
-      zoomSpeed={1.2}
+      enableDamping dampingFactor={0.07}
+      enablePan enableZoom enableRotate
+      rotateSpeed={0.7} zoomSpeed={1.2}
+      target={[0, 0, 0]}
     />
   )
 }
