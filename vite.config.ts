@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   base: '/NomaDough/',
   worker: {
-    format: 'es',
+    format: 'iife',
   },
   optimizeDeps: {
     exclude: ['opencv.js'],

@@ -80,7 +80,7 @@ export function SettingsPanel() {
         workerRef.current.terminate();
       }
 
-      const worker = new Worker(new URL('../workers/cv.worker.ts', import.meta.url), { type: 'module' });
+      const worker = new Worker(new URL('../workers/cv.worker.ts', import.meta.url));
       workerRef.current = worker;
 
       worker.onmessage = (e: MessageEvent<CVWorkerResult | CVWorkerError>) => {
