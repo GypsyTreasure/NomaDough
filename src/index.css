@@ -14,57 +14,54 @@ html, body, #root {
 }
 
 body {
-  font-family: 'Inter', system-ui, sans-serif;
-  background: #0f0f0f;
-  color: #f0f0f0;
+  font-family: 'Barlow', 'Inter', system-ui, sans-serif;
+  background: #0D1B2A;
+  color: #F0F0F0;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
+:root {
+  --bg: #0D1B2A;
+  --surface: #0F2035;
+  --surface-raised: #162840;
+  --border: #1A3558;
+  --accent: #22C59A;
+  --accent-dim: #1A6B5A;
+  --text-primary: #F0F0F0;
+  --text-secondary: #7A9BB8;
+  --danger: #E05050;
 }
 
-::-webkit-scrollbar-track {
-  background: #0f0f0f;
-}
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #264070; }
 
-::-webkit-scrollbar-thumb {
-  background: #2a2a2a;
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #3a3a3a;
-}
-
-/* Range input styling */
+/* Range inputs */
 input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   height: 4px;
-  background: #2a2a2a;
+  background: var(--border);
   border-radius: 2px;
   outline: none;
+  width: 100%;
 }
-
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  appearance: none;
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #7EC845;
+  background: var(--accent);
   cursor: pointer;
   border: none;
-  box-shadow: none;
 }
-
 input[type="range"]::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: #7EC845;
+  background: var(--accent);
   cursor: pointer;
   border: none;
 }

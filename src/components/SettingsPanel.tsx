@@ -13,39 +13,31 @@ const labelStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
-  color: '#888888',
+  color: '#7A9BB8',
   fontSize: '12px',
   marginBottom: '4px',
 };
 
 const valueStyle: React.CSSProperties = {
-  color: '#f0f0f0',
+  color: '#F0F0F0',
   fontFamily: 'monospace',
   fontSize: '11px',
 };
 
-const sliderStyle: React.CSSProperties = {
-  width: '100%',
-  accentColor: '#7EC845',
-  cursor: 'pointer',
-};
-
-const btnBase: React.CSSProperties = {
-  width: '100%',
-  padding: '10px',
-  borderRadius: '6px',
-  border: 'none',
-  cursor: 'pointer',
-  fontSize: '13px',
-  fontFamily: 'Inter, sans-serif',
+const sectionTitle: React.CSSProperties = {
+  color: '#22C59A',
+  fontSize: '11px',
+  letterSpacing: '1px',
+  textTransform: 'uppercase' as const,
+  marginBottom: '12px',
   fontWeight: 600,
-  transition: 'all 0.15s',
+  fontFamily: "'Barlow', sans-serif",
 };
 
 const sectionStyle: React.CSSProperties = {
   marginBottom: '20px',
   paddingBottom: '20px',
-  borderBottom: '1px solid #2a2a2a',
+  borderBottom: '1px solid #1A3558',
 };
 
 export function SettingsPanel() {
@@ -78,6 +70,7 @@ export function SettingsPanel() {
 
       if (workerRef.current) {
         workerRef.current.terminate();
+        workerRef.current = null;
       }
 
       const worker = new Worker(new URL('../workers/cv.worker.ts', import.meta.url));
@@ -117,15 +110,17 @@ export function SettingsPanel() {
   const handleGenerate = useCallback(() => {
     if (!contourResult) return;
     setIsGenerating(true);
-    try {
-      const geo = generateCutterGeometry(contourResult, settings.cutterProfile);
-      setGeometry(geo);
-      setStlBlob(null);
-    } catch (err: any) {
-      alert('3D generation failed. Try increasing smoothing or re-uploading image.\n\n' + (err.message ?? ''));
-    } finally {
-      setIsGenerating(false);
-    }
+    setTimeout(() => {
+      try {
+        const geo = generateCutterGeometry(contourResult, settings.cutterProfile);
+        setGeometry(geo);
+        setStlBlob(null);
+      } catch (err: any) {
+        alert('3D generation failed. Try increasing smoothing or re-uploading image.\n\n' + (err.message ?? ''));
+      } finally {
+        setIsGenerating(false);
+      }
+    }, 0);
   }, [contourResult, settings.cutterProfile, setGeometry, setStlBlob, setIsGenerating]);
 
   const handleExport = useCallback(() => {
@@ -137,32 +132,62 @@ export function SettingsPanel() {
 
   const stlSizeKb = stlBlob ? (stlBlob.size / 1024).toFixed(1) : null;
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '0', padding: '16px', overflowY: 'auto', height: '100%' }}>
+  const btnPrimary = (enabled: boolean): React.CSSProperties => ({
+    width: '100%',
+    padding: '10px',
+    borderRadius: '6px',
+    border: 'none',
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    fontSize: '13px',
+    fontFamily: "'Barlow', sans-serif",
+    fontWeight: 600,
+    letterSpacing: '0.3px',
+    background: enabled ? '#22C59A' : '#0F2A20',
+    color: enabled ? '#0D1B2A' : '#1A3558',
+    transition: 'all 0.15s',
+    marginBottom: '8px',
+  });
 
-      {/* Image section */}
+  const btnOutline = (enabled: boolean): React.CSSProperties => ({
+    width: '100%',
+    padding: '10px',
+    borderRadius: '6px',
+    border: `1px solid ${enabled ? '#22C59A' : '#1A3558'}`,
+    cursor: enabled ? 'pointer' : 'not-allowed',
+    fontSize: '13px',
+    fontFamily: "'Barlow', sans-serif",
+    fontWeight: 600,
+    letterSpacing: '0.3px',
+    background: 'transparent',
+    color: enabled ? '#22C59A' : '#1A3558',
+    transition: 'all 0.15s',
+    marginBottom: '8px',
+  });
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', padding: '16px', overflowY: 'auto', height: '100%', gap: '0' }}>
+
+      {/* 1. Image */}
       <div style={sectionStyle}>
-        <div style={{ color: '#7EC845', fontSize: '11px', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '12px', fontWeight: 600 }}>
-          1. Image Input
-        </div>
+        <div style={sectionTitle}>1 · Image Input</div>
 
         <div style={{ marginBottom: '12px' }}>
           <ImageUpload />
         </div>
 
         {/* Threshold */}
-        <div style={{ marginBottom: '12px' }}>
+        <div style={{ marginBottom: '10px' }}>
           <div style={labelStyle}>
             <span>Threshold</span>
-            <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <button
                 onClick={() => setThresholdAuto(!thresholdAuto)}
                 style={{
                   padding: '2px 8px',
                   borderRadius: '4px',
-                  border: `1px solid ${thresholdAuto ? '#7EC845' : '#2a2a2a'}`,
-                  background: thresholdAuto ? '#1a2a10' : 'transparent',
-                  color: thresholdAuto ? '#7EC845' : '#888888',
+                  border: `1px solid ${thresholdAuto ? '#22C59A' : '#1A3558'}`,
+                  background: thresholdAuto ? '#0F2A20' : 'transparent',
+                  color: thresholdAuto ? '#22C59A' : '#7A9BB8',
                   cursor: 'pointer',
                   fontSize: '10px',
                   fontFamily: 'monospace',
@@ -170,20 +195,14 @@ export function SettingsPanel() {
               >
                 Auto (Otsu)
               </button>
-              {!thresholdAuto && (
-                <span style={valueStyle}>{typeof settings.threshold === 'number' ? settings.threshold : 128}</span>
-              )}
+              {!thresholdAuto && <span style={valueStyle}>{typeof settings.threshold === 'number' ? settings.threshold : 128}</span>}
             </div>
           </div>
           {!thresholdAuto && (
             <input
-              type="range"
-              min={0}
-              max={255}
-              step={1}
+              type="range" min={0} max={255} step={1}
               value={typeof settings.threshold === 'number' ? settings.threshold : 128}
               onChange={(e) => updateSettings({ threshold: parseInt(e.target.value) })}
-              style={sliderStyle}
             />
           )}
         </div>
@@ -195,128 +214,86 @@ export function SettingsPanel() {
             <span style={valueStyle}>{settings.smoothing}</span>
           </div>
           <input
-            type="range"
-            min={0}
-            max={5}
-            step={1}
+            type="range" min={0} max={5} step={1}
             value={settings.smoothing}
             onChange={(e) => updateSettings({ smoothing: parseInt(e.target.value) })}
-            style={sliderStyle}
           />
         </div>
 
-        {/* Detect button */}
         <button
           onClick={handleDetect}
           disabled={!imageFile || processingState === 'processing'}
-          style={{
-            ...btnBase,
-            background: imageFile && processingState !== 'processing' ? '#7EC845' : '#1a2a10',
-            color: imageFile && processingState !== 'processing' ? '#0f0f0f' : '#444444',
-            cursor: imageFile && processingState !== 'processing' ? 'pointer' : 'not-allowed',
-            marginBottom: '12px',
-          }}
+          style={btnPrimary(!!imageFile && processingState !== 'processing')}
         >
           {processingState === 'processing' ? 'Detecting…' : 'Detect Contour'}
         </button>
 
-        {/* Contour Preview */}
         {imageUrl && <ContourPreview />}
       </div>
 
-      {/* Cutter Profile section */}
+      {/* 2. Cutter Profile */}
       <div style={sectionStyle}>
-        <div style={{ color: '#7EC845', fontSize: '11px', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '12px', fontWeight: 600 }}>
-          2. Cutter Profile
-        </div>
+        <div style={sectionTitle}>2 · Cutter Profile</div>
 
-        {/* Target size */}
-        <div style={{ marginBottom: '12px' }}>
+        <div style={{ marginBottom: '10px' }}>
           <div style={labelStyle}>
             <span>Target shape height</span>
             <span style={valueStyle}>{settings.targetHeightMm} mm</span>
           </div>
           <input
-            type="range"
-            min={20}
-            max={300}
-            step={5}
+            type="range" min={20} max={300} step={5}
             value={settings.targetHeightMm}
             onChange={(e) => updateSettings({ targetHeightMm: parseInt(e.target.value) })}
-            style={sliderStyle}
           />
         </div>
 
-        {/* A */}
-        <div style={{ marginBottom: '12px' }}>
+        <div style={{ marginBottom: '10px' }}>
           <div style={labelStyle}>
-            <span>A — Cutting edge width</span>
+            <span>A — Cutting edge</span>
             <span style={valueStyle}>{settings.cutterProfile.a.toFixed(2)} mm</span>
           </div>
           <input
-            type="range"
-            min={0.1}
-            max={2.0}
-            step={0.05}
+            type="range" min={0.1} max={2.0} step={0.05}
             value={settings.cutterProfile.a}
             onChange={(e) => updateProfile({ a: parseFloat(e.target.value) })}
-            style={sliderStyle}
           />
         </div>
 
-        {/* B */}
-        <div style={{ marginBottom: '12px' }}>
+        <div style={{ marginBottom: '10px' }}>
           <div style={labelStyle}>
             <span>B — Base width</span>
             <span style={valueStyle}>{settings.cutterProfile.b.toFixed(1)} mm</span>
           </div>
           <input
-            type="range"
-            min={1.0}
-            max={8.0}
-            step={0.1}
+            type="range" min={1.0} max={8.0} step={0.1}
             value={settings.cutterProfile.b}
             onChange={(e) => updateProfile({ b: parseFloat(e.target.value) })}
-            style={sliderStyle}
           />
         </div>
 
-        {/* C */}
-        <div style={{ marginBottom: '12px' }}>
+        <div style={{ marginBottom: '14px' }}>
           <div style={labelStyle}>
             <span>C — Wall height</span>
             <span style={valueStyle}>{settings.cutterProfile.c.toFixed(0)} mm</span>
           </div>
           <input
-            type="range"
-            min={5}
-            max={50}
-            step={1}
+            type="range" min={5} max={50} step={1}
             value={settings.cutterProfile.c}
             onChange={(e) => updateProfile({ c: parseFloat(e.target.value) })}
-            style={sliderStyle}
           />
         </div>
 
         <ProfileDiagram />
       </div>
 
-      {/* Generate & Export section */}
+      {/* 3. Generate & Export */}
       <div>
-        <div style={{ color: '#7EC845', fontSize: '11px', letterSpacing: '1px', textTransform: 'uppercase', marginBottom: '12px', fontWeight: 600 }}>
-          3. Generate & Export
-        </div>
+        <div style={sectionTitle}>3 · Generate & Export</div>
 
         <button
           onClick={handleGenerate}
           disabled={!contourResult || isGenerating}
-          style={{
-            ...btnBase,
-            background: contourResult && !isGenerating ? '#7EC845' : '#1a2a10',
-            color: contourResult && !isGenerating ? '#0f0f0f' : '#444444',
-            cursor: contourResult && !isGenerating ? 'pointer' : 'not-allowed',
-            marginBottom: '8px',
-          }}
+          style={btnPrimary(!!contourResult && !isGenerating)}
         >
           {isGenerating ? 'Generating…' : 'Generate 3D Model'}
         </button>
@@ -324,26 +301,19 @@ export function SettingsPanel() {
         <button
           onClick={handleExport}
           disabled={!geometry}
-          style={{
-            ...btnBase,
-            background: geometry ? '#1a2a10' : 'transparent',
-            color: geometry ? '#7EC845' : '#444444',
-            border: `1px solid ${geometry ? '#7EC845' : '#2a2a2a'}`,
-            cursor: geometry ? 'pointer' : 'not-allowed',
-            marginBottom: '8px',
-          }}
+          style={btnOutline(!!geometry)}
         >
           Export STL
         </button>
 
         {stlSizeKb && (
-          <div style={{ color: '#888888', fontSize: '11px', fontFamily: 'monospace', textAlign: 'center' }}>
+          <div style={{ color: '#7A9BB8', fontSize: '11px', fontFamily: 'monospace', textAlign: 'center', marginTop: '2px' }}>
             STL: {stlSizeKb} KB
           </div>
         )}
 
         {geometry && (
-          <div style={{ color: '#444444', fontSize: '10px', textAlign: 'center', marginTop: '4px', wordBreak: 'break-all' }}>
+          <div style={{ color: '#1A3558', fontSize: '10px', textAlign: 'center', marginTop: '4px', wordBreak: 'break-all' }}>
             {buildExportFilename(imageFile)}
           </div>
         )}

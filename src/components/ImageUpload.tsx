@@ -34,23 +34,20 @@ export function ImageUpload() {
 
   return (
     <div>
-      <label style={{ display: 'block', color: '#888888', fontSize: '11px', letterSpacing: '0.8px', textTransform: 'uppercase', marginBottom: '8px' }}>
-        Image
-      </label>
       <div
         onClick={() => inputRef.current?.click()}
         onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         style={{
-          border: `1px dashed ${dragging ? '#7EC845' : '#2a2a2a'}`,
+          border: `1px dashed ${dragging ? '#22C59A' : '#1A3558'}`,
           borderRadius: '8px',
-          padding: '16px',
+          padding: '14px',
           cursor: 'pointer',
-          background: dragging ? '#1a2a10' : '#111111',
+          background: dragging ? '#0F2A20' : '#0F2035',
           transition: 'all 0.15s',
           textAlign: 'center',
-          minHeight: '80px',
+          minHeight: '72px',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
@@ -63,22 +60,22 @@ export function ImageUpload() {
             <img
               src={imageUrl}
               alt="Uploaded"
-              style={{ maxHeight: '120px', maxWidth: '100%', borderRadius: '4px', objectFit: 'contain' }}
+              style={{ maxHeight: '110px', maxWidth: '100%', borderRadius: '4px', objectFit: 'contain' }}
             />
-            <span style={{ color: '#888888', fontSize: '11px' }}>{imageFile?.name}</span>
-            <span style={{ color: '#444444', fontSize: '10px' }}>Click to replace</span>
+            <span style={{ color: '#7A9BB8', fontSize: '11px' }}>{imageFile?.name}</span>
+            <span style={{ color: '#1A3558', fontSize: '10px' }}>Click to replace</span>
           </>
         ) : (
           <>
-            <div style={{ color: '#444444', fontSize: '28px' }}>↑</div>
-            <div style={{ color: '#888888', fontSize: '12px' }}>Drop image here or click to browse</div>
-            <div style={{ color: '#444444', fontSize: '10px' }}>JPEG, PNG, HEIC, HEIF</div>
+            <div style={{ color: '#1A3558', fontSize: '26px' }}>↑</div>
+            <div style={{ color: '#7A9BB8', fontSize: '12px' }}>Drop image here or click to browse</div>
+            <div style={{ color: '#1A3558', fontSize: '10px' }}>JPEG · PNG · HEIC · HEIF</div>
           </>
         )}
       </div>
 
       {error && (
-        <div style={{ color: '#ff4444', fontSize: '11px', marginTop: '6px', padding: '6px 8px', background: '#1a0000', borderRadius: '4px', border: '1px solid #440000' }}>
+        <div style={{ color: '#E05050', fontSize: '11px', marginTop: '6px', padding: '6px 8px', background: '#1A0F0F', borderRadius: '4px', border: '1px solid #3A1A1A' }}>
           {error}
         </div>
       )}

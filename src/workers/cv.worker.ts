@@ -1,22 +1,18 @@
 import type { CVWorkerMessage, CVWorkerResult, CVWorkerError, ContourResult } from '../types';
 
-declare const importScripts: (...urls: string[]) => void;
-
-// Load OpenCV
-importScripts('https://docs.opencv.org/4.8.0/opencv.js');
-
+declare function importScripts(...urls: string[]): void;
 declare const cv: any;
-declare const Module: any;
 
-const cvReady = new Promise<void>((resolve) => {
-  if (typeof cv !== 'undefined' && cv.Mat) {
-    resolve();
-    return;
-  }
-  (self as any).Module = {
-    onRuntimeInitialized: () => resolve(),
-  };
-});
+// Module.onRuntimeInitialized MUST be set before importScripts so OpenCV
+// can call it when the WASM finishes loading.
+let resolveCV!: () => void;
+const cvReady = new Promise<void>((resolve) => { resolveCV = resolve; });
+
+(self as any).Module = {
+  onRuntimeInitialized() { resolveCV(); },
+};
+
+importScripts('https://docs.opencv.org/4.8.0/opencv.js');
 
 self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
   if (e.data.type !== 'PROCESS_IMAGE') return;
@@ -24,53 +20,50 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
 
   try {
     await cvReady;
+    const _cv = (self as any).cv;
 
-    const src = cv.matFromImageData(imageData);
-    const gray = new cv.Mat();
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    const src = _cv.matFromImageData(imageData);
+    const gray = new _cv.Mat();
+    _cv.cvtColor(src, gray, _cv.COLOR_RGBA2GRAY);
 
-    const blurred = new cv.Mat();
-    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+    const blurred = new _cv.Mat();
+    _cv.GaussianBlur(gray, blurred, new _cv.Size(5, 5), 0);
 
-    const binary = new cv.Mat();
+    const binary = new _cv.Mat();
     if (settings.threshold === 'auto') {
-      cv.threshold(blurred, binary, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+      _cv.threshold(blurred, binary, 0, 255, _cv.THRESH_BINARY_INV + _cv.THRESH_OTSU);
     } else {
-      cv.threshold(blurred, binary, settings.threshold as number, 255, cv.THRESH_BINARY_INV);
+      _cv.threshold(blurred, binary, settings.threshold as number, 255, _cv.THRESH_BINARY_INV);
     }
 
-    const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3));
-    const closed = new cv.Mat();
-    cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, kernel, new cv.Point(-1, -1), 2);
+    const kernel = _cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(3, 3));
+    const closed = new _cv.Mat();
+    _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, kernel, new _cv.Point(-1, -1), 2);
 
-    const contours = new cv.MatVector();
-    const hierarchy = new cv.Mat();
-    cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_TC89_KCOS);
+    const contours = new _cv.MatVector();
+    const hierarchy = new _cv.Mat();
+    _cv.findContours(closed, contours, hierarchy, _cv.RETR_EXTERNAL, _cv.CHAIN_APPROX_TC89_KCOS);
 
     let largestIdx = -1;
     let largestArea = 0;
     for (let i = 0; i < contours.size(); i++) {
-      const area = cv.contourArea(contours.get(i));
-      if (area > largestArea) {
-        largestArea = area;
-        largestIdx = i;
-      }
+      const area = _cv.contourArea(contours.get(i));
+      if (area > largestArea) { largestArea = area; largestIdx = i; }
     }
 
     if (largestIdx === -1 || largestArea < 500) {
       throw new Error('No shape detected. Ensure the drawing has a clear closed outline on a light background.');
     }
 
-    // Sanity check: if contour bbox ≈ image size, threshold is too low
-    const contourRect = cv.boundingRect(contours.get(largestIdx));
+    const contourRect = _cv.boundingRect(contours.get(largestIdx));
     const imageArea = imageData.width * imageData.height;
     const bboxArea = contourRect.width * contourRect.height;
     if (bboxArea > imageArea * 0.85) {
       throw new Error('Threshold too low — the entire image border was detected. Try increasing the threshold.');
     }
 
-    const simplified = new cv.Mat();
-    cv.approxPolyDP(contours.get(largestIdx), simplified, 2.0, true);
+    const simplified = new _cv.Mat();
+    _cv.approxPolyDP(contours.get(largestIdx), simplified, 2.0, true);
 
     let pixelPoints: Array<{ x: number; y: number }> = [];
     for (let i = 0; i < simplified.rows; i++) {
@@ -80,7 +73,6 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       });
     }
 
-    // Chaikin smoothing
     for (let iter = 0; iter < settings.smoothing; iter++) {
       const smoothed: typeof pixelPoints = [];
       const n = pixelPoints.length;
