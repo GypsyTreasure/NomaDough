@@ -4,10 +4,14 @@ import { CutterProfile, ContourResult } from '../types';
 export function buildProfileShape(profile: CutterProfile): THREE.Shape {
   const { a, b, c } = profile;
   const shape = new THREE.Shape();
-  shape.moveTo(-b / 2, 0);
-  shape.lineTo(b / 2, 0);
-  shape.lineTo(a / 2, c);
-  shape.lineTo(-a / 2, c);
+  // For a CatmullRomCurve3 in the XZ plane, Three.js Frenet frames give:
+  //   normals   = (0, -1, 0)  →  shape local X maps to world -Y
+  //   binormals = radial XZ   →  shape local Y maps to wall thickness in XZ
+  // So: base at local x=0 → world Y=0; cutting edge at local x=-c → world Y=c.
+  shape.moveTo(0,  -b / 2);  // base, world Y=0
+  shape.lineTo(0,   b / 2);
+  shape.lineTo(-c,  a / 2);  // cutting edge, world Y=c
+  shape.lineTo(-c, -a / 2);
   shape.closePath();
   return shape;
 }
