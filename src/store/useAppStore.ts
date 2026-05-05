@@ -7,6 +7,7 @@ const defaultSettings: AppSettings = {
   shapePerfection: 0.3,
   threshold: 'auto',
   cutterProfile: { a: 0.2, b: 3.0, c: 12.0 },
+  loopCount: 'auto',
 };
 
 type ProcessingState = 'idle' | 'processing' | 'done' | 'error';

@@ -1,27 +1,26 @@
-import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useGeometryStore } from '../../store/useGeometryStore';
 
+const MAIN_COLOR = '#7EC845';
+const INNER_COLOR = '#FF8C00';
+
 export function CutterModel() {
-  const geometry = useGeometryStore((s) => s.geometry);
-  const meshRef = useRef<THREE.Mesh>(null);
+  const geometries = useGeometryStore((s) => s.geometries);
 
-  useEffect(() => {
-    if (meshRef.current && geometry) {
-      meshRef.current.geometry = geometry;
-    }
-  }, [geometry]);
-
-  if (!geometry) return null;
+  if (geometries.length === 0) return null;
 
   return (
-    <mesh ref={meshRef} geometry={geometry} castShadow receiveShadow>
-      <meshStandardMaterial
-        color="#7EC845"
-        metalness={0.1}
-        roughness={0.5}
-        side={THREE.DoubleSide}
-      />
-    </mesh>
+    <>
+      {geometries.map((geo, i) => (
+        <mesh key={i} geometry={geo} castShadow receiveShadow>
+          <meshStandardMaterial
+            color={i === 0 ? MAIN_COLOR : INNER_COLOR}
+            metalness={0.1}
+            roughness={0.5}
+            side={THREE.DoubleSide}
+          />
+        </mesh>
+      ))}
+    </>
   );
 }

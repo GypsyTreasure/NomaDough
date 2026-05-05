@@ -133,77 +133,99 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     const hierarchy = new _cv.Mat();
     _cv.findContours(closed, contours, hierarchy, _cv.RETR_EXTERNAL, _cv.CHAIN_APPROX_TC89_KCOS);
 
-    let largestIdx = -1;
-    let largestArea = 0;
+    // Collect all contours with area >= 500px²
+    const validContours: Array<{ idx: number; area: number }> = [];
     for (let i = 0; i < contours.size(); i++) {
       const area = _cv.contourArea(contours.get(i));
-      if (area > largestArea) { largestArea = area; largestIdx = i; }
+      if (area >= 500) validContours.push({ idx: i, area });
     }
 
-    if (largestIdx === -1 || largestArea < 500) {
+    if (validContours.length === 0) {
       throw new Error('No shape detected. Ensure the drawing has a clear closed outline on a light background.');
     }
 
-    const contourRect = _cv.boundingRect(contours.get(largestIdx));
+    // Sort by area descending — largest first
+    validContours.sort((a, b) => b.area - a.area);
+
+    // Check main contour is not border-filling
+    const mainRect = _cv.boundingRect(contours.get(validContours[0].idx));
     const imageArea = imageData.width * imageData.height;
-    const bboxArea = contourRect.width * contourRect.height;
-    if (bboxArea > imageArea * 0.85) {
+    if (mainRect.width * mainRect.height > imageArea * 0.85) {
       throw new Error('Threshold too low — the entire image border was detected. Try increasing the threshold.');
     }
 
+    // Apply loopCount selection
+    let selected: typeof validContours;
+    if (settings.loopCount === 'auto') {
+      const areaThreshold = validContours[0].area * 0.05;
+      selected = validContours.filter(c => c.area >= areaThreshold);
+    } else {
+      selected = validContours.slice(0, settings.loopCount as number);
+    }
+
     const epsilon = 2.0 + settings.shapePerfection * 2.0;
-    const simplified = new _cv.Mat();
-    _cv.approxPolyDP(contours.get(largestIdx), simplified, epsilon, true);
 
-    let pixelPoints: Array<{ x: number; y: number }> = [];
-    for (let i = 0; i < simplified.rows; i++) {
-      pixelPoints.push({
-        x: simplified.data32S[i * 2],
-        y: simplified.data32S[i * 2 + 1],
-      });
-    }
+    // Simplify + smooth a single contour mat → pixel point array
+    function processContour(contourMat: any): Array<{ x: number; y: number }> {
+      const simplified = new _cv.Mat();
+      _cv.approxPolyDP(contourMat, simplified, epsilon, true);
 
-    // Stage 1: Chaikin smoothing (global, independent of corner detection)
-    for (let iter = 0; iter < settings.smoothing; iter++) {
-      const smoothed: typeof pixelPoints = [];
-      const n = pixelPoints.length;
-      for (let i = 0; i < n; i++) {
-        const p0 = pixelPoints[i];
-        const p1 = pixelPoints[(i + 1) % n];
-        smoothed.push({ x: 0.75 * p0.x + 0.25 * p1.x, y: 0.75 * p0.y + 0.25 * p1.y });
-        smoothed.push({ x: 0.25 * p0.x + 0.75 * p1.x, y: 0.25 * p0.y + 0.75 * p1.y });
+      let pts: Array<{ x: number; y: number }> = [];
+      for (let i = 0; i < simplified.rows; i++) {
+        pts.push({ x: simplified.data32S[i * 2], y: simplified.data32S[i * 2 + 1] });
       }
-      pixelPoints = smoothed;
+      simplified.delete();
+
+      // Stage 1: Chaikin smoothing (global, independent of corner detection)
+      for (let iter = 0; iter < settings.smoothing; iter++) {
+        const smoothed: typeof pts = [];
+        const n = pts.length;
+        for (let i = 0; i < n; i++) {
+          const p0 = pts[i];
+          const p1 = pts[(i + 1) % n];
+          smoothed.push({ x: 0.75 * p0.x + 0.25 * p1.x, y: 0.75 * p0.y + 0.25 * p1.y });
+          smoothed.push({ x: 0.25 * p0.x + 0.75 * p1.x, y: 0.25 * p0.y + 0.75 * p1.y });
+        }
+        pts = smoothed;
+      }
+
+      // Stage 2: corner-preserving shape perfection (additional, on top of smoothing)
+      pts = cornerPreservingSmooth(pts, settings.shapePerfection);
+      return pts;
     }
 
-    // Stage 2: corner-preserving shape perfection (additional, on top of smoothing)
-    pixelPoints = cornerPreservingSmooth(pixelPoints, settings.shapePerfection);
+    // Process all selected contours into pixel-space point arrays
+    const allPixelPoints = selected.map(c => processContour(contours.get(c.idx)));
 
-    const ys = pixelPoints.map((p) => p.y);
-    const xs = pixelPoints.map((p) => p.x);
-    const pixelHeight = Math.max(...ys) - Math.min(...ys);
+    // Compute scale + center from main contour only — all others share the same transform
+    const mainPixelPoints = allPixelPoints[0];
+    const mainYs = mainPixelPoints.map(p => p.y);
+    const mainXs = mainPixelPoints.map(p => p.x);
+    const pixelHeight = Math.max(...mainYs) - Math.min(...mainYs);
 
     if (pixelHeight < 1) {
       throw new Error('Detected shape is too small. Try adjusting the threshold or photograph in better lighting.');
     }
 
     const scaleFactor = settings.targetHeightMm / pixelHeight;
-    const cx_px = (Math.max(...xs) + Math.min(...xs)) / 2;
-    const cy_px = (Math.max(...ys) + Math.min(...ys)) / 2;
+    const cx_px = (Math.max(...mainXs) + Math.min(...mainXs)) / 2;
+    const cy_px = (Math.max(...mainYs) + Math.min(...mainYs)) / 2;
 
-    const mmPoints = pixelPoints.map((p) => ({
-      x: (p.x - cx_px) * scaleFactor,
-      y: (p.y - cy_px) * scaleFactor,
-    }));
+    const scaleContour = (pts: Array<{ x: number; y: number }>) =>
+      pts.map(p => ({ x: (p.x - cx_px) * scaleFactor, y: (p.y - cy_px) * scaleFactor }));
 
-    [src, gray, enhanced, blurred, binary, kernel, closed, simplified, contours, hierarchy].forEach((m) => {
+    [src, gray, enhanced, blurred, binary, kernel, closed, contours, hierarchy].forEach((m) => {
       try { m.delete(); } catch (_) {}
     });
     try { clahe.delete(); } catch (_) {}
 
     const result: ContourResult = {
-      points: mmPoints,
-      pixelPoints,
+      points: scaleContour(mainPixelPoints),
+      pixelPoints: mainPixelPoints,
+      innerContours: allPixelPoints.slice(1).map(pts => ({
+        points: scaleContour(pts),
+        pixelPoints: pts,
+      })),
       imageWidth: imageData.width,
       imageHeight: imageData.height,
     };

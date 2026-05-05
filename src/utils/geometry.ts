@@ -40,3 +40,27 @@ export function generateCutterGeometry(
   geometry.computeBoundingBox();
   return geometry;
 }
+
+export function generateAllCutterGeometries(
+  contour: ContourResult,
+  profile: CutterProfile
+): THREE.BufferGeometry[] {
+  const geometries: THREE.BufferGeometry[] = [];
+
+  // Main contour
+  geometries.push(generateCutterGeometry(contour, profile));
+
+  // Inner contours — same profile, same coordinate space
+  for (const inner of contour.innerContours) {
+    const innerResult: ContourResult = {
+      points: inner.points,
+      pixelPoints: inner.pixelPoints,
+      innerContours: [],
+      imageWidth: contour.imageWidth,
+      imageHeight: contour.imageHeight,
+    };
+    geometries.push(generateCutterGeometry(innerResult, profile));
+  }
+
+  return geometries;
+}

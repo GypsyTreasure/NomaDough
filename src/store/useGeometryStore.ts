@@ -2,8 +2,8 @@ import { create } from 'zustand';
 import * as THREE from 'three';
 
 interface GeometryStore {
-  geometry: THREE.BufferGeometry | null;
-  setGeometry: (g: THREE.BufferGeometry) => void;
+  geometries: THREE.BufferGeometry[];
+  setGeometries: (g: THREE.BufferGeometry[]) => void;
   stlBlob: Blob | null;
   setStlBlob: (b: Blob | null) => void;
   isGenerating: boolean;
@@ -11,11 +11,11 @@ interface GeometryStore {
 }
 
 export const useGeometryStore = create<GeometryStore>((set) => ({
-  geometry: null,
+  geometries: [],
   stlBlob: null,
   isGenerating: false,
 
-  setGeometry: (g) => set({ geometry: g }),
+  setGeometries: (g) => set({ geometries: g }),
   setStlBlob: (b) => set({ stlBlob: b }),
   setIsGenerating: (v) => set({ isGenerating: v }),
 }));

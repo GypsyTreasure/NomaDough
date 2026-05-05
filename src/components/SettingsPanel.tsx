@@ -1,11 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { useGeometryStore } from '../store/useGeometryStore';
 import { ImageUpload } from './ImageUpload';
 import { ContourPreview } from './ContourPreview';
 import { ProfileDiagram } from './ProfileDiagram';
-import { generateCutterGeometry } from '../utils/geometry';
-import { exportSTL, buildExportFilename } from '../utils/exporter';
+import { generateAllCutterGeometries } from '../utils/geometry';
+import { exportAllSTLs, buildExportFilename } from '../utils/exporter';
 import { fileToImageData } from '../utils/cv-helpers';
 import type { CVWorkerResult, CVWorkerError } from '../types';
 
@@ -51,15 +51,18 @@ export function SettingsPanel() {
   const setContourResult = useAppStore((s) => s.setContourResult);
   const setProcessingState = useAppStore((s) => s.setProcessingState);
 
-  const geometry = useGeometryStore((s) => s.geometry);
-  const setGeometry = useGeometryStore((s) => s.setGeometry);
+  const geometries = useGeometryStore((s) => s.geometries);
+  const setGeometries = useGeometryStore((s) => s.setGeometries);
   const stlBlob = useGeometryStore((s) => s.stlBlob);
   const setStlBlob = useGeometryStore((s) => s.setStlBlob);
   const isGenerating = useGeometryStore((s) => s.isGenerating);
   const setIsGenerating = useGeometryStore((s) => s.setIsGenerating);
 
   const workerRef = useRef<Worker | null>(null);
-  const [thresholdAuto, setThresholdAuto] = useState(true);
+
+  const loopCountAuto = settings.loopCount === 'auto';
+  const loopCountValue = typeof settings.loopCount === 'number' ? settings.loopCount : 1;
+  const thresholdAuto = settings.threshold === 'auto';
 
   const handleDetect = useCallback(async () => {
     if (!imageFile) return;
@@ -101,6 +104,7 @@ export function SettingsPanel() {
           smoothing: settings.smoothing,
           shapePerfection: settings.shapePerfection,
           targetHeightMm: settings.targetHeightMm,
+          loopCount: settings.loopCount,
         },
       });
     } catch (err: any) {
@@ -113,8 +117,8 @@ export function SettingsPanel() {
     setIsGenerating(true);
     setTimeout(() => {
       try {
-        const geo = generateCutterGeometry(contourResult, settings.cutterProfile);
-        setGeometry(geo);
+        const geos = generateAllCutterGeometries(contourResult, settings.cutterProfile);
+        setGeometries(geos);
         setStlBlob(null);
       } catch (err: any) {
         alert('3D generation failed. Try increasing smoothing or re-uploading image.\n\n' + (err.message ?? ''));
@@ -122,16 +126,16 @@ export function SettingsPanel() {
         setIsGenerating(false);
       }
     }, 0);
-  }, [contourResult, settings.cutterProfile, setGeometry, setStlBlob, setIsGenerating]);
+  }, [contourResult, settings.cutterProfile, setGeometries, setStlBlob, setIsGenerating]);
 
   const handleExport = useCallback(() => {
-    if (!geometry) return;
-    const filename = buildExportFilename(imageFile);
-    const blob = exportSTL(geometry, filename);
+    if (geometries.length === 0) return;
+    const blob = exportAllSTLs(geometries, imageFile);
     setStlBlob(blob);
-  }, [geometry, imageFile, setStlBlob]);
+  }, [geometries, imageFile, setStlBlob]);
 
   const stlSizeKb = stlBlob ? (stlBlob.size / 1024).toFixed(1) : null;
+  const hasGeometry = geometries.length > 0;
 
   const btnPrimary = (enabled: boolean): React.CSSProperties => ({
     width: '100%',
@@ -182,7 +186,7 @@ export function SettingsPanel() {
             <span>Threshold</span>
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
               <button
-                onClick={() => setThresholdAuto(!thresholdAuto)}
+                onClick={() => updateSettings({ threshold: thresholdAuto ? 128 : 'auto' })}
                 style={{
                   padding: '2px 8px',
                   borderRadius: '4px',
@@ -248,6 +252,56 @@ export function SettingsPanel() {
             value={settings.shapePerfection}
             onChange={(e) => updateSettings({ shapePerfection: parseFloat(e.target.value) })}
           />
+        </div>
+
+        {/* Loop Count */}
+        <div style={{ marginBottom: '12px' }}>
+          <div style={labelStyle}>
+            <span>Loop count</span>
+            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+              <button
+                onClick={() => updateSettings({ loopCount: loopCountAuto ? loopCountValue : 'auto' })}
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  border: `1px solid ${loopCountAuto ? '#22C59A' : '#1A3558'}`,
+                  background: loopCountAuto ? '#0F2A20' : 'transparent',
+                  color: loopCountAuto ? '#22C59A' : '#7A9BB8',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  fontFamily: 'monospace',
+                }}
+              >
+                Auto
+              </button>
+              {!loopCountAuto && (
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={loopCountValue}
+                  onChange={(e) => {
+                    const v = Math.max(1, Math.min(20, parseInt(e.target.value) || 1));
+                    updateSettings({ loopCount: v });
+                  }}
+                  style={{
+                    width: '48px',
+                    padding: '2px 4px',
+                    borderRadius: '4px',
+                    border: '1px solid #1A3558',
+                    background: '#0D1B2A',
+                    color: '#F0F0F0',
+                    fontSize: '11px',
+                    fontFamily: 'monospace',
+                    textAlign: 'center',
+                  }}
+                />
+              )}
+            </div>
+          </div>
+          <div style={{ color: '#7A9BB8', fontSize: '10px', marginTop: '2px', fontFamily: 'monospace' }}>
+            {loopCountAuto ? 'Auto detects all shapes.' : 'Set manually if auto picks up noise.'}
+          </div>
         </div>
 
         <button
@@ -318,21 +372,23 @@ export function SettingsPanel() {
 
         <button
           onClick={handleExport}
-          disabled={!geometry}
-          style={btnOutline(!!geometry)}
+          disabled={!hasGeometry}
+          style={btnOutline(hasGeometry)}
         >
-          Export STL
+          {geometries.length > 1 ? `Export STL (${geometries.length} files)` : 'Export STL'}
         </button>
 
         {stlSizeKb && (
           <div style={{ color: '#7A9BB8', fontSize: '11px', fontFamily: 'monospace', textAlign: 'center', marginTop: '2px' }}>
-            STL: {stlSizeKb} KB
+            STL: {stlSizeKb} KB{geometries.length > 1 ? ` × ${geometries.length}` : ''}
           </div>
         )}
 
-        {geometry && (
+        {hasGeometry && (
           <div style={{ color: '#1A3558', fontSize: '10px', textAlign: 'center', marginTop: '4px', wordBreak: 'break-all' }}>
-            {buildExportFilename(imageFile)}
+            {geometries.length > 1
+              ? buildExportFilename(imageFile).replace('.STL', '-loop1…N.STL')
+              : buildExportFilename(imageFile)}
           </div>
         )}
       </div>

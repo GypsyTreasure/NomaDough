@@ -29,19 +29,37 @@ export function ContourPreview() {
       if (contourResult && contourResult.pixelPoints.length > 2) {
         const scaleX = canvas.width / contourResult.imageWidth;
         const scaleY = canvas.height / contourResult.imageHeight;
-        const pts = contourResult.pixelPoints;
 
+        // Draw main contour — solid green
+        const pts = contourResult.pixelPoints;
         ctx.beginPath();
         ctx.moveTo(pts[0].x * scaleX, pts[0].y * scaleY);
         for (let i = 1; i < pts.length; i++) {
           ctx.lineTo(pts[i].x * scaleX, pts[i].y * scaleY);
         }
         ctx.closePath();
-        ctx.strokeStyle = '#22C59A';
+        ctx.strokeStyle = '#7EC845';
         ctx.lineWidth = 2;
         ctx.stroke();
-        ctx.fillStyle = 'rgba(34, 197, 154, 0.07)';
+        ctx.fillStyle = 'rgba(126, 200, 69, 0.07)';
         ctx.fill();
+
+        // Draw inner contours — solid orange
+        for (const inner of contourResult.innerContours) {
+          if (inner.pixelPoints.length < 3) continue;
+          const ipts = inner.pixelPoints;
+          ctx.beginPath();
+          ctx.moveTo(ipts[0].x * scaleX, ipts[0].y * scaleY);
+          for (let i = 1; i < ipts.length; i++) {
+            ctx.lineTo(ipts[i].x * scaleX, ipts[i].y * scaleY);
+          }
+          ctx.closePath();
+          ctx.strokeStyle = '#FF8C00';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.fillStyle = 'rgba(255, 140, 0, 0.07)';
+          ctx.fill();
+        }
       } else if (processingError) {
         ctx.setLineDash([6, 4]);
         ctx.strokeStyle = '#E05050';
@@ -60,6 +78,13 @@ export function ContourPreview() {
   const ys = mmPoints.map((p) => p.y);
   const wMm = mmPoints.length > 0 ? Math.round(Math.max(...xs) - Math.min(...xs)) : null;
   const hMm = mmPoints.length > 0 ? Math.round(Math.max(...ys) - Math.min(...ys)) : null;
+
+  const innerCount = contourResult?.innerContours.length ?? 0;
+  const loopStatusText = contourResult
+    ? innerCount > 0
+      ? `Detected: 1 main loop + ${innerCount} inner loop${innerCount > 1 ? 's' : ''}`
+      : 'Detected: 1 loop'
+    : null;
 
   return (
     <div>
@@ -84,6 +109,12 @@ export function ContourPreview() {
         <div style={{ color: '#7A9BB8', fontSize: '11px', marginTop: '6px', fontFamily: 'monospace' }}>
           {contourResult.pixelPoints.length} pts
           {wMm !== null && hMm !== null && ` · ~${wMm}×${hMm} mm`}
+        </div>
+      )}
+
+      {loopStatusText && (
+        <div style={{ fontSize: '11px', marginTop: '3px', fontFamily: 'monospace', color: innerCount > 0 ? '#FF8C00' : '#7EC845' }}>
+          {loopStatusText}
         </div>
       )}
 

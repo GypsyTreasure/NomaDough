@@ -37,7 +37,7 @@ function SceneContent() {
 }
 
 export function Scene() {
-  const geometry = useGeometryStore((s) => s.geometry);
+  const geometries = useGeometryStore((s) => s.geometries);
 
   return (
     <div style={{ width: '100%', height: '100%', background: '#0D1B2A', position: 'relative' }}>
@@ -50,7 +50,7 @@ export function Scene() {
         <SceneContent />
       </Canvas>
 
-      {!geometry && (
+      {geometries.length === 0 && (
         <div style={{
           position: 'absolute', top: '50%', left: '50%',
           transform: 'translate(-50%, -50%)',
