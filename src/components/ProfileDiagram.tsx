@@ -21,13 +21,12 @@ export function ProfileDiagram() {
   const drawH = bottom - top;
   const cx = left + drawW / 2;
 
-  // Scale widths and height proportionally — B sets horizontal scale, C sets vertical
-  const scaleW = drawW / Math.max(b, 0.1);
-  const scaleH = drawH / Math.max(c, 1);
+  // Uniform scale: maintain true A/B/C proportions — tallest/widest dimension fills its axis
+  const scale = Math.min(drawH / Math.max(c, 1), drawW / Math.max(b, 0.1));
 
-  const halfB = (b * scaleW) / 2;
-  const halfA = Math.max((a * scaleW) / 2, 1.5);  // minimum 1.5px so A is always visible
-  const scaledC = c * scaleH;                      // should == drawH
+  const halfB = (b * scale) / 2;
+  const halfA = Math.max((a * scale) / 2, 1.5);  // minimum 1.5px so A is always visible
+  const scaledC = c * scale;
 
   // Vertex positions (SVG: y increases downward, so bottom = larger y)
   const topY    = bottom - scaledC;   // A edge (cutting edge) — top of shape

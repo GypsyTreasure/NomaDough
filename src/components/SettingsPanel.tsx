@@ -208,6 +208,19 @@ export function SettingsPanel() {
           )}
         </div>
 
+        {/* Target shape height — here because it feeds into Detect Contour */}
+        <div style={{ marginBottom: '10px' }}>
+          <div style={labelStyle}>
+            <span>Target shape height</span>
+            <span style={valueStyle}>{settings.targetHeightMm} mm</span>
+          </div>
+          <input
+            type="range" min={8} max={300} step={5}
+            value={settings.targetHeightMm}
+            onChange={(e) => updateSettings({ targetHeightMm: parseInt(e.target.value) })}
+          />
+        </div>
+
         {/* Smoothing */}
         <div style={{ marginBottom: '12px' }}>
           <div style={labelStyle}>
@@ -254,18 +267,6 @@ export function SettingsPanel() {
 
         <div style={{ marginBottom: '10px' }}>
           <div style={labelStyle}>
-            <span>Target shape height</span>
-            <span style={valueStyle}>{settings.targetHeightMm} mm</span>
-          </div>
-          <input
-            type="range" min={8} max={300} step={5}
-            value={settings.targetHeightMm}
-            onChange={(e) => updateSettings({ targetHeightMm: parseInt(e.target.value) })}
-          />
-        </div>
-
-        <div style={{ marginBottom: '10px' }}>
-          <div style={labelStyle}>
             <span>A — Cutting edge</span>
             <span style={valueStyle}>{settings.cutterProfile.a.toFixed(2)} mm</span>
           </div>
@@ -294,7 +295,7 @@ export function SettingsPanel() {
             <span style={valueStyle}>{settings.cutterProfile.c.toFixed(0)} mm</span>
           </div>
           <input
-            type="range" min={8} max={250} step={1}
+            type="range" min={5} max={50} step={1}
             value={settings.cutterProfile.c}
             onChange={(e) => updateProfile({ c: parseFloat(e.target.value) })}
           />
