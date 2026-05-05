@@ -20,7 +20,9 @@ function cornerPreservingSmooth(
 ): Array<{x: number, y: number}> {
   if (points.length < 4) return points;
 
-  const cornerThresholdDeg = 30 - shapePerfection * 20;
+  // sp=0 (organic): high threshold → only sharp spikes preserved, curves smoothed freely
+  // sp=1 (geometric): low threshold → even gentle angles treated as corners, fully preserved
+  const cornerThresholdDeg = 120 - shapePerfection * 100; // 120° at 0 → 20° at 1.0
   const cornerThresholdRad = (cornerThresholdDeg * Math.PI) / 180;
 
   function angle(p0: {x:number,y:number}, p1: {x:number,y:number}, p2: {x:number,y:number}): number {
@@ -38,8 +40,9 @@ function cornerPreservingSmooth(
     const prev = points[(i - 1 + n) % n];
     const curr = points[i];
     const next = points[(i + 1) % n];
-    const a = angle(prev, curr, next);
-    if (Math.PI - a < cornerThresholdRad) isCorner[i] = true;
+    // bendAngle: 0 = straight line, π/2 = 90° turn, π = U-turn
+    const bendAngle = Math.PI - angle(prev, curr, next);
+    if (bendAngle > cornerThresholdRad) isCorner[i] = true;
   }
 
   // Apply Chaikin only on non-corner segments (2 iterations fixed)
@@ -148,7 +151,7 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       throw new Error('Threshold too low — the entire image border was detected. Try increasing the threshold.');
     }
 
-    const epsilon = 2.0 + settings.shapePerfection * 8.0;
+    const epsilon = 2.0 + settings.shapePerfection * 2.0;
     const simplified = new _cv.Mat();
     _cv.approxPolyDP(contours.get(largestIdx), simplified, epsilon, true);
 
