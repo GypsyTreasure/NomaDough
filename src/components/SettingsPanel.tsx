@@ -98,7 +98,7 @@ export function SettingsPanel() {
         imageData,
         settings: {
           threshold: thresholdAuto ? 'auto' : settings.threshold,
-          smoothing: settings.smoothing,
+          shapePerfection: settings.shapePerfection,
           targetHeightMm: settings.targetHeightMm,
         },
       });
@@ -207,16 +207,19 @@ export function SettingsPanel() {
           )}
         </div>
 
-        {/* Smoothing */}
+        {/* Shape Perfection */}
         <div style={{ marginBottom: '12px' }}>
           <div style={labelStyle}>
-            <span>Smoothing iterations</span>
-            <span style={valueStyle}>{settings.smoothing}</span>
+            <span>Shape Perfection</span>
+            <span style={valueStyle}>{Math.round(settings.shapePerfection * 100)}%</span>
+          </div>
+          <div style={{ color: '#7A9BB8', fontSize: '10px', marginBottom: '4px', fontFamily: 'monospace' }}>
+            0 = organic curves &nbsp;←&nbsp;&nbsp;→&nbsp; 1 = perfect geometry
           </div>
           <input
-            type="range" min={0} max={5} step={1}
-            value={settings.smoothing}
-            onChange={(e) => updateSettings({ smoothing: parseInt(e.target.value) })}
+            type="range" min={0.0} max={1.0} step={0.01}
+            value={settings.shapePerfection}
+            onChange={(e) => updateSettings({ shapePerfection: parseFloat(e.target.value) })}
           />
         </div>
 
@@ -241,7 +244,7 @@ export function SettingsPanel() {
             <span style={valueStyle}>{settings.targetHeightMm} mm</span>
           </div>
           <input
-            type="range" min={20} max={300} step={5}
+            type="range" min={8} max={300} step={5}
             value={settings.targetHeightMm}
             onChange={(e) => updateSettings({ targetHeightMm: parseInt(e.target.value) })}
           />
@@ -277,7 +280,7 @@ export function SettingsPanel() {
             <span style={valueStyle}>{settings.cutterProfile.c.toFixed(0)} mm</span>
           </div>
           <input
-            type="range" min={5} max={50} step={1}
+            type="range" min={8} max={250} step={1}
             value={settings.cutterProfile.c}
             onChange={(e) => updateProfile({ c: parseFloat(e.target.value) })}
           />

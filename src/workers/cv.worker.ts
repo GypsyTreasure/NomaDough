@@ -14,6 +14,77 @@ const cvReady = new Promise<void>((resolve) => { resolveCV = resolve; });
 
 importScripts('https://docs.opencv.org/4.8.0/opencv.js');
 
+function cornerPreservingSmooth(
+  points: Array<{x: number, y: number}>,
+  shapePerfection: number
+): Array<{x: number, y: number}> {
+  if (points.length < 4) return points;
+
+  const cornerThresholdDeg = 30 - shapePerfection * 20;
+  const cornerThresholdRad = (cornerThresholdDeg * Math.PI) / 180;
+
+  function angle(p0: {x:number,y:number}, p1: {x:number,y:number}, p2: {x:number,y:number}): number {
+    const ax = p0.x - p1.x, ay = p0.y - p1.y;
+    const bx = p2.x - p1.x, by = p2.y - p1.y;
+    const dot = ax*bx + ay*by;
+    const magA = Math.hypot(ax, ay), magB = Math.hypot(bx, by);
+    if (magA === 0 || magB === 0) return 0;
+    return Math.acos(Math.max(-1, Math.min(1, dot / (magA * magB))));
+  }
+
+  const n = points.length;
+  const isCorner = new Array(n).fill(false);
+  for (let i = 0; i < n; i++) {
+    const prev = points[(i - 1 + n) % n];
+    const curr = points[i];
+    const next = points[(i + 1) % n];
+    const a = angle(prev, curr, next);
+    if (Math.PI - a < cornerThresholdRad) isCorner[i] = true;
+  }
+
+  // Apply Chaikin only on non-corner segments (2 iterations fixed)
+  let pts = [...points];
+  for (let iter = 0; iter < 2; iter++) {
+    const newPts: typeof pts = [];
+    const n2 = pts.length;
+    for (let i = 0; i < n2; i++) {
+      const j = (i + 1) % n2;
+      if (isCorner[i % isCorner.length] || isCorner[j % isCorner.length]) {
+        newPts.push(pts[i]);
+      } else {
+        newPts.push({ x: 0.75*pts[i].x + 0.25*pts[j].x, y: 0.75*pts[i].y + 0.25*pts[j].y });
+        newPts.push({ x: 0.25*pts[i].x + 0.75*pts[j].x, y: 0.25*pts[i].y + 0.75*pts[j].y });
+      }
+    }
+    pts = newPts;
+  }
+
+  // At high shapePerfection, snap near-90° corners to exact 90°
+  if (shapePerfection > 0.5) {
+    const snapStrength = (shapePerfection - 0.5) * 2;
+    pts = pts.map((p, i) => {
+      if (!isCorner[i % isCorner.length]) return p;
+      const prev = pts[(i - 1 + pts.length) % pts.length];
+      const next = pts[(i + 1) % pts.length];
+      const ax = p.x - prev.x, ay = p.y - prev.y;
+      const bx = next.x - p.x, by = next.y - p.y;
+      const angleDeg = Math.abs(Math.atan2(ay, ax) - Math.atan2(by, bx)) * 180 / Math.PI;
+      if (Math.abs(angleDeg - 90) < 20 || Math.abs(angleDeg - 270) < 20) {
+        const len = Math.hypot(ax, ay);
+        const snappedX = prev.x + Math.round(ax / len) * len;
+        const snappedY = prev.y + Math.round(ay / len) * len;
+        return {
+          x: p.x + (snappedX - p.x) * snapStrength,
+          y: p.y + (snappedY - p.y) * snapStrength,
+        };
+      }
+      return p;
+    });
+  }
+
+  return pts;
+}
+
 self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
   if (e.data.type !== 'PROCESS_IMAGE') return;
   const { imageData, settings } = e.data;
@@ -26,8 +97,16 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     const gray = new _cv.Mat();
     _cv.cvtColor(src, gray, _cv.COLOR_RGBA2GRAY);
 
+    // Normalize contrast to full 0-255 range (fixes low-contrast pencil drawings)
+    _cv.normalize(gray, gray, 0, 255, _cv.NORM_MINMAX);
+
+    // CLAHE to boost local contrast in low-contrast regions (clipLimit=3.0, tileGridSize=8x8)
+    const clahe = new _cv.CLAHE(3.0, new _cv.Size(8, 8));
+    const enhanced = new _cv.Mat();
+    clahe.apply(gray, enhanced);
+
     const blurred = new _cv.Mat();
-    _cv.GaussianBlur(gray, blurred, new _cv.Size(5, 5), 0);
+    _cv.GaussianBlur(enhanced, blurred, new _cv.Size(7, 7), 0);
 
     const binary = new _cv.Mat();
     if (settings.threshold === 'auto') {
@@ -36,9 +115,9 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       _cv.threshold(blurred, binary, settings.threshold as number, 255, _cv.THRESH_BINARY_INV);
     }
 
-    const kernel = _cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(3, 3));
+    const kernel = _cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(5, 5));
     const closed = new _cv.Mat();
-    _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, kernel, new _cv.Point(-1, -1), 2);
+    _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, kernel, new _cv.Point(-1, -1), 3);
 
     const contours = new _cv.MatVector();
     const hierarchy = new _cv.Mat();
@@ -62,8 +141,9 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       throw new Error('Threshold too low — the entire image border was detected. Try increasing the threshold.');
     }
 
+    const epsilon = 2.0 + settings.shapePerfection * 8.0;
     const simplified = new _cv.Mat();
-    _cv.approxPolyDP(contours.get(largestIdx), simplified, 2.0, true);
+    _cv.approxPolyDP(contours.get(largestIdx), simplified, epsilon, true);
 
     let pixelPoints: Array<{ x: number; y: number }> = [];
     for (let i = 0; i < simplified.rows; i++) {
@@ -73,17 +153,7 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       });
     }
 
-    for (let iter = 0; iter < settings.smoothing; iter++) {
-      const smoothed: typeof pixelPoints = [];
-      const n = pixelPoints.length;
-      for (let i = 0; i < n; i++) {
-        const p0 = pixelPoints[i];
-        const p1 = pixelPoints[(i + 1) % n];
-        smoothed.push({ x: 0.75 * p0.x + 0.25 * p1.x, y: 0.75 * p0.y + 0.25 * p1.y });
-        smoothed.push({ x: 0.25 * p0.x + 0.75 * p1.x, y: 0.25 * p0.y + 0.75 * p1.y });
-      }
-      pixelPoints = smoothed;
-    }
+    pixelPoints = cornerPreservingSmooth(pixelPoints, settings.shapePerfection);
 
     const ys = pixelPoints.map((p) => p.y);
     const xs = pixelPoints.map((p) => p.x);
@@ -102,9 +172,10 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       y: (p.y - cy_px) * scaleFactor,
     }));
 
-    [src, gray, blurred, binary, kernel, closed, simplified, contours, hierarchy].forEach((m) => {
+    [src, gray, enhanced, blurred, binary, kernel, closed, simplified, contours, hierarchy].forEach((m) => {
       try { m.delete(); } catch (_) {}
     });
+    try { clahe.delete(); } catch (_) {}
 
     const result: ContourResult = {
       points: mmPoints,
