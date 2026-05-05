@@ -110,7 +110,14 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
 
     const binary = new _cv.Mat();
     if (settings.threshold === 'auto') {
-      _cv.threshold(blurred, binary, 0, 255, _cv.THRESH_BINARY_INV + _cv.THRESH_OTSU);
+      // Adaptive threshold handles yellowed/grey paper and uneven lighting far better than
+      // global Otsu, which fails when background is not pure white.
+      const shortSide = Math.min(imageData.width, imageData.height);
+      // blockSize must be odd, roughly 1/15 of the shorter dimension (min 11, max 101)
+      let bs = Math.round(shortSide / 15);
+      if (bs % 2 === 0) bs += 1;
+      bs = Math.max(11, Math.min(101, bs));
+      _cv.adaptiveThreshold(blurred, binary, 255, _cv.ADAPTIVE_THRESH_GAUSSIAN_C, _cv.THRESH_BINARY_INV, bs, 10);
     } else {
       _cv.threshold(blurred, binary, settings.threshold as number, 255, _cv.THRESH_BINARY_INV);
     }
@@ -153,6 +160,20 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       });
     }
 
+    // Stage 1: Chaikin smoothing (global, independent of corner detection)
+    for (let iter = 0; iter < settings.smoothing; iter++) {
+      const smoothed: typeof pixelPoints = [];
+      const n = pixelPoints.length;
+      for (let i = 0; i < n; i++) {
+        const p0 = pixelPoints[i];
+        const p1 = pixelPoints[(i + 1) % n];
+        smoothed.push({ x: 0.75 * p0.x + 0.25 * p1.x, y: 0.75 * p0.y + 0.25 * p1.y });
+        smoothed.push({ x: 0.25 * p0.x + 0.75 * p1.x, y: 0.25 * p0.y + 0.75 * p1.y });
+      }
+      pixelPoints = smoothed;
+    }
+
+    // Stage 2: corner-preserving shape perfection (additional, on top of smoothing)
     pixelPoints = cornerPreservingSmooth(pixelPoints, settings.shapePerfection);
 
     const ys = pixelPoints.map((p) => p.y);

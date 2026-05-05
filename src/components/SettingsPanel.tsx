@@ -98,6 +98,7 @@ export function SettingsPanel() {
         imageData,
         settings: {
           threshold: thresholdAuto ? 'auto' : settings.threshold,
+          smoothing: settings.smoothing,
           shapePerfection: settings.shapePerfection,
           targetHeightMm: settings.targetHeightMm,
         },
@@ -193,7 +194,7 @@ export function SettingsPanel() {
                   fontFamily: 'monospace',
                 }}
               >
-                Auto (Otsu)
+                Auto (adaptive)
               </button>
               {!thresholdAuto && <span style={valueStyle}>{typeof settings.threshold === 'number' ? settings.threshold : 128}</span>}
             </div>
@@ -205,6 +206,19 @@ export function SettingsPanel() {
               onChange={(e) => updateSettings({ threshold: parseInt(e.target.value) })}
             />
           )}
+        </div>
+
+        {/* Smoothing */}
+        <div style={{ marginBottom: '12px' }}>
+          <div style={labelStyle}>
+            <span>Smoothing</span>
+            <span style={valueStyle}>{settings.smoothing} iter</span>
+          </div>
+          <input
+            type="range" min={0} max={10} step={1}
+            value={settings.smoothing}
+            onChange={(e) => updateSettings({ smoothing: parseInt(e.target.value) })}
+          />
         </div>
 
         {/* Shape Perfection */}

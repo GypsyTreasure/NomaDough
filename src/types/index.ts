@@ -6,6 +6,7 @@ export interface CutterProfile {
 
 export interface AppSettings {
   targetHeightMm: number;
+  smoothing: number;        // Chaikin iterations 0–10
   shapePerfection: number;  // 0.0 (organic/curved) to 1.0 (geometric/straight), default 0.3
   threshold: number | 'auto';
   cutterProfile: CutterProfile;
@@ -21,7 +22,7 @@ export interface ContourResult {
 export interface CVWorkerMessage {
   type: 'PROCESS_IMAGE';
   imageData: ImageData;
-  settings: Pick<AppSettings, 'threshold' | 'shapePerfection' | 'targetHeightMm'>;
+  settings: Pick<AppSettings, 'threshold' | 'smoothing' | 'shapePerfection' | 'targetHeightMm'>;
 }
 
 export interface CVWorkerResult {

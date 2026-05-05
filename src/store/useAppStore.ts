@@ -3,6 +3,7 @@ import { AppSettings, ContourResult, CutterProfile } from '../types';
 
 const defaultSettings: AppSettings = {
   targetHeightMm: 80,
+  smoothing: 2,
   shapePerfection: 0.3,
   threshold: 'auto',
   cutterProfile: { a: 0.2, b: 3.0, c: 12.0 },
