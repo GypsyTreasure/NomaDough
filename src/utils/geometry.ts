@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CutterProfile, ContourResult } from '../types';
+import { CutterProfile, ContourResult, RibSettings } from '../types';
 
 export function buildProfileShape(profile: CutterProfile): THREE.Shape {
   const { a, b, c } = profile;
@@ -39,4 +39,154 @@ export function generateCutterGeometry(
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();
   return geometry;
+}
+
+// Cohen-Sutherland outcodes
+const CS_INSIDE = 0, CS_LEFT = 1, CS_RIGHT = 2, CS_BOTTOM = 4, CS_TOP = 8;
+
+function computeOutcode(x: number, y: number, minX: number, minY: number, maxX: number, maxY: number): number {
+  let code = CS_INSIDE;
+  if (x < minX) code |= CS_LEFT;
+  else if (x > maxX) code |= CS_RIGHT;
+  if (y < minY) code |= CS_BOTTOM;
+  else if (y > maxY) code |= CS_TOP;
+  return code;
+}
+
+function clipLineToBbox(
+  x1: number, y1: number, x2: number, y2: number,
+  minX: number, minY: number, maxX: number, maxY: number
+): { x1: number; y1: number; x2: number; y2: number } | null {
+  let outcode1 = computeOutcode(x1, y1, minX, minY, maxX, maxY);
+  let outcode2 = computeOutcode(x2, y2, minX, minY, maxX, maxY);
+
+  while (true) {
+    if (!(outcode1 | outcode2)) return { x1, y1, x2, y2 }; // both inside
+    if (outcode1 & outcode2) return null; // both outside same region
+
+    const outcodeOut = outcode1 ? outcode1 : outcode2;
+    let x = 0, y = 0;
+
+    if (outcodeOut & CS_TOP) {
+      x = x1 + (x2 - x1) * (maxY - y1) / (y2 - y1);
+      y = maxY;
+    } else if (outcodeOut & CS_BOTTOM) {
+      x = x1 + (x2 - x1) * (minY - y1) / (y2 - y1);
+      y = minY;
+    } else if (outcodeOut & CS_RIGHT) {
+      y = y1 + (y2 - y1) * (maxX - x1) / (x2 - x1);
+      x = maxX;
+    } else {
+      y = y1 + (y2 - y1) * (minX - x1) / (x2 - x1);
+      x = minX;
+    }
+
+    if (outcodeOut === outcode1) {
+      x1 = x; y1 = y;
+      outcode1 = computeOutcode(x1, y1, minX, minY, maxX, maxY);
+    } else {
+      x2 = x; y2 = y;
+      outcode2 = computeOutcode(x2, y2, minX, minY, maxX, maxY);
+    }
+  }
+}
+
+function isPointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean {
+  let inside = false;
+  const n = polygon.length;
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    if (((yi > py) !== (yj > py)) && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function buildRibLineData(
+  contour: ContourResult,
+  ribs: RibSettings
+): Array<{ x1: number; y1: number; x2: number; y2: number }> {
+  const ribW = ribs.ribWidth;
+  const { points } = contour;
+  const xs = points.map(p => p.x);
+  const ys = points.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const diagLen = Math.hypot(maxX - minX, maxY - minY) * 1.5;
+
+  const angleRad = (ribs.angle * Math.PI) / 180;
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  const perpX = Math.sin(angleRad), perpY = -Math.cos(angleRad);
+  const ribDirX = Math.cos(angleRad), ribDirY = Math.sin(angleRad);
+
+  const segments: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  const steps = Math.ceil(diagLen / ribs.spacing);
+
+  for (let i = -steps; i <= steps; i++) {
+    const offsetX = perpX * i * ribs.spacing;
+    const offsetY = perpY * i * ribs.spacing;
+
+    const startX = cx + offsetX - ribDirX * diagLen / 2;
+    const startY = cy + offsetY - ribDirY * diagLen / 2;
+    const endX   = cx + offsetX + ribDirX * diagLen / 2;
+    const endY   = cy + offsetY + ribDirY * diagLen / 2;
+
+    const clipped = clipLineToBbox(startX, startY, endX, endY, minX - ribW, minY - ribW, maxX + ribW, maxY + ribW);
+    if (!clipped) continue;
+
+    const midX = (clipped.x1 + clipped.x2) / 2;
+    const midY = (clipped.y1 + clipped.y2) / 2;
+    if (!isPointInPolygon(midX, midY, points)) continue;
+
+    segments.push(clipped);
+  }
+  return segments;
+}
+
+export function generateRibGeometries(
+  contour: ContourResult,
+  profile: CutterProfile,
+  ribs: RibSettings
+): THREE.BufferGeometry[] {
+  if (!ribs.enabled || ribs.spacing <= 0) return [];
+
+  const ribH = 3.0;
+  const ribW = profile.b;
+  const segments = buildRibLineData(contour, ribs);
+  const geometries: THREE.BufferGeometry[] = [];
+
+  for (const seg of segments) {
+    const segLen = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
+    if (segLen < 1.0) continue;
+
+    const geo = new THREE.BoxGeometry(segLen, ribH, ribW);
+    geo.translate(0, ribH / 2, 0);
+
+    const ribAngle = Math.atan2(seg.y2 - seg.y1, seg.x2 - seg.x1);
+    geo.rotateY(-ribAngle);
+
+    geo.translate((seg.x1 + seg.x2) / 2, 0, (seg.y1 + seg.y2) / 2);
+    geometries.push(geo);
+  }
+
+  return geometries;
+}
+
+export function generateRibLinePositions(
+  contour: ContourResult,
+  ribs: RibSettings
+): number[] {
+  if (!ribs.enabled || ribs.spacing <= 0) return [];
+
+  const segments = buildRibLineData(contour, ribs);
+  const positions: number[] = [];
+
+  for (const seg of segments) {
+    // contour x → world X, contour y → world Z, Y=0.5 to sit just above base plane
+    positions.push(seg.x1, 0.5, seg.y1, seg.x2, 0.5, seg.y2);
+  }
+
+  return positions;
 }

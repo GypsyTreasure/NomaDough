@@ -4,9 +4,10 @@ import { useGeometryStore } from '../store/useGeometryStore';
 import { ImageUpload } from './ImageUpload';
 import { ContourPreview } from './ContourPreview';
 import { ProfileDiagram } from './ProfileDiagram';
-import { generateCutterGeometry } from '../utils/geometry';
+import { generateCutterGeometry, generateRibGeometries } from '../utils/geometry';
 import { exportSTL, buildExportFilename } from '../utils/exporter';
 import { fileToImageData } from '../utils/cv-helpers';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { CVWorkerResult, CVWorkerError } from '../types';
 
 const labelStyle: React.CSSProperties = {
@@ -44,6 +45,7 @@ export function SettingsPanel() {
   const settings = useAppStore((s) => s.settings);
   const updateProfile = useAppStore((s) => s.updateProfile);
   const updateSettings = useAppStore((s) => s.updateSettings);
+  const updateRibSettings = useAppStore((s) => s.updateRibSettings);
   const imageFile = useAppStore((s) => s.imageFile);
   const imageUrl = useAppStore((s) => s.imageUrl);
   const processingState = useAppStore((s) => s.processingState);
@@ -113,8 +115,21 @@ export function SettingsPanel() {
     setIsGenerating(true);
     setTimeout(() => {
       try {
-        const geo = generateCutterGeometry(contourResult, settings.cutterProfile);
-        setGeometry(geo);
+        const mainGeo = generateCutterGeometry(contourResult, settings.cutterProfile);
+        const { ribSettings } = settings;
+        if (ribSettings.enabled) {
+          const ribGeos = generateRibGeometries(contourResult, settings.cutterProfile, ribSettings);
+          if (ribGeos.length > 0) {
+            const merged = mergeGeometries([mainGeo, ...ribGeos]);
+            if (merged) {
+              merged.computeVertexNormals();
+              setGeometry(merged);
+              setStlBlob(null);
+              return;
+            }
+          }
+        }
+        setGeometry(mainGeo);
         setStlBlob(null);
       } catch (err: any) {
         alert('3D generation failed. Try increasing smoothing or re-uploading image.\n\n' + (err.message ?? ''));
@@ -122,7 +137,7 @@ export function SettingsPanel() {
         setIsGenerating(false);
       }
     }, 0);
-  }, [contourResult, settings.cutterProfile, setGeometry, setStlBlob, setIsGenerating]);
+  }, [contourResult, settings, setGeometry, setStlBlob, setIsGenerating]);
 
   const handleExport = useCallback(() => {
     if (!geometry) return;
@@ -164,6 +179,9 @@ export function SettingsPanel() {
     transition: 'all 0.15s',
     marginBottom: '8px',
   });
+
+  const { ribSettings } = settings;
+  const ribsDisabled = !ribSettings.enabled;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', padding: '16px', overflowY: 'auto', height: '100%', gap: '0' }}>
@@ -304,9 +322,70 @@ export function SettingsPanel() {
         <ProfileDiagram />
       </div>
 
-      {/* 3. Generate & Export */}
+      {/* 3. Reinforcement Ribs */}
+      <div style={sectionStyle}>
+        <div style={sectionTitle}>3 · Reinforcement Ribs</div>
+
+        {/* Enable toggle */}
+        <div style={{ marginBottom: '12px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={ribSettings.enabled}
+              onChange={(e) => updateRibSettings({ enabled: e.target.checked })}
+              style={{ accentColor: '#22C59A', width: '14px', height: '14px' }}
+            />
+            <span style={{ color: ribSettings.enabled ? '#F0F0F0' : '#7A9BB8', fontSize: '12px' }}>
+              Add bottom ribs
+            </span>
+          </label>
+        </div>
+
+        {/* Grid spacing */}
+        <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={labelStyle}>
+            <span>Rib spacing</span>
+            <span style={valueStyle}>{ribSettings.spacing} mm</span>
+          </div>
+          <input
+            type="range" min={5} max={50} step={1}
+            value={ribSettings.spacing}
+            disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ spacing: parseInt(e.target.value) })}
+          />
+        </div>
+
+        {/* Grid angle */}
+        <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={labelStyle}>
+            <span>Rib angle</span>
+            <span style={valueStyle}>{ribSettings.angle}°</span>
+          </div>
+          <input
+            type="range" min={0} max={90} step={5}
+            value={ribSettings.angle}
+            disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ angle: parseInt(e.target.value) })}
+          />
+          <div style={{ color: '#1A3558', fontSize: '10px', fontFamily: 'monospace', marginTop: '2px' }}>
+            0° = parallel · 45° = diagonal · 90° = perpendicular
+          </div>
+        </div>
+
+        {/* Read-only info */}
+        <div style={{ opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={{ color: '#7A9BB8', fontSize: '11px', fontFamily: 'monospace', marginBottom: '2px' }}>
+            Rib height: <span style={{ color: '#F0F0F0' }}>3 mm</span> (fixed)
+          </div>
+          <div style={{ color: '#7A9BB8', fontSize: '11px', fontFamily: 'monospace' }}>
+            Rib width: <span style={{ color: '#F0F0F0' }}>{ribSettings.ribWidth.toFixed(1)} mm</span> (matches base width)
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Generate & Export */}
       <div>
-        <div style={sectionTitle}>3 · Generate & Export</div>
+        <div style={sectionTitle}>4 · Generate & Export</div>
 
         <button
           onClick={handleGenerate}

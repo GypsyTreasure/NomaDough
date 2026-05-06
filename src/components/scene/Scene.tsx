@@ -1,9 +1,38 @@
 import { Canvas } from '@react-three/fiber';
 import { Grid } from '@react-three/drei';
-import { Suspense } from 'react';
+import { Suspense, useMemo, useEffect } from 'react';
+import * as THREE from 'three';
 import { CutterModel } from './CutterModel';
 import { SceneControls } from './SceneControls';
 import { useGeometryStore } from '../../store/useGeometryStore';
+import { useAppStore } from '../../store/useAppStore';
+import { generateRibLinePositions } from '../../utils/geometry';
+
+function RibLinesPreview() {
+  const contourResult = useAppStore((s) => s.contourResult);
+  const ribSettings = useAppStore((s) => s.settings.ribSettings);
+
+  const lineGeo = useMemo(() => {
+    if (!ribSettings.enabled || !contourResult) return null;
+    const positions = generateRibLinePositions(contourResult, ribSettings);
+    if (positions.length === 0) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return geo;
+  }, [contourResult, ribSettings]);
+
+  useEffect(() => {
+    return () => { lineGeo?.dispose(); };
+  }, [lineGeo]);
+
+  if (!lineGeo) return null;
+
+  return (
+    <lineSegments geometry={lineGeo}>
+      <lineBasicMaterial color="#22C59A" opacity={0.55} transparent />
+    </lineSegments>
+  );
+}
 
 function SceneContent() {
   return (
@@ -28,6 +57,8 @@ function SceneContent() {
       />
 
       <SceneControls />
+
+      <RibLinesPreview />
 
       <Suspense fallback={null}>
         <CutterModel />
