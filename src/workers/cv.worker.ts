@@ -189,8 +189,13 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
         pts = smoothed;
       }
 
-      // Stage 2: corner-preserving shape perfection (additional, on top of smoothing)
-      pts = cornerPreservingSmooth(pts, settings.shapePerfection);
+      // Stage 2: corner-preserving shape perfection — only active when shapePerfection > 0.
+      // At sp=0 this is skipped entirely; calling it at sp=0 would still apply 2 Chaikin
+      // iterations to non-corner segments (corner threshold 120° ≫ typical 90° bend),
+      // producing rounded corners and kinks even when the user expects the raw outline.
+      if (settings.shapePerfection > 0) {
+        pts = cornerPreservingSmooth(pts, settings.shapePerfection);
+      }
       return pts;
     }
 
