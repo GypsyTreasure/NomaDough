@@ -200,10 +200,34 @@ export function SettingsPanel() {
               >
                 Auto (adaptive)
               </button>
-              {!thresholdAuto && <span style={valueStyle}>{typeof settings.threshold === 'number' ? settings.threshold : 128}</span>}
+              {!thresholdAuto && (
+                // Number input for precise entry — shows the exact value and accepts typed numbers
+                <input
+                  type="number"
+                  min={0}
+                  max={255}
+                  value={typeof settings.threshold === 'number' ? settings.threshold : 128}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value);
+                    if (!isNaN(v)) updateSettings({ threshold: Math.max(0, Math.min(255, v)) });
+                  }}
+                  style={{
+                    width: '44px',
+                    padding: '2px 4px',
+                    borderRadius: '4px',
+                    border: '1px solid #1A3558',
+                    background: '#0D1B2A',
+                    color: '#F0F0F0',
+                    fontSize: '11px',
+                    fontFamily: 'monospace',
+                    textAlign: 'center',
+                  }}
+                />
+              )}
             </div>
           </div>
           {!thresholdAuto && (
+            // Range slider alongside the number input — both control the same value
             <input
               type="range" min={0} max={255} step={1}
               value={typeof settings.threshold === 'number' ? settings.threshold : 128}
