@@ -113,14 +113,12 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
 
     const binary = new _cv.Mat();
     if (settings.threshold === 'auto') {
-      // Adaptive threshold handles yellowed/grey paper and uneven lighting far better than
-      // global Otsu, which fails when background is not pure white.
-      const shortSide = Math.min(imageData.width, imageData.height);
-      // blockSize must be odd, roughly 1/15 of the shorter dimension (min 11, max 101)
-      let bs = Math.round(shortSide / 15);
-      if (bs % 2 === 0) bs += 1;
-      bs = Math.max(11, Math.min(101, bs));
-      _cv.adaptiveThreshold(blurred, binary, 255, _cv.ADAPTIVE_THRESH_GAUSSIAN_C, _cv.THRESH_BINARY_INV, bs, 10);
+      // Otsu's method finds the optimal global threshold by maximising inter-class variance
+      // between the two histogram peaks (paper vs. ink). It works reliably for uniform-
+      // background images (grey, white, cream paper + pencil/pen). Adaptive threshold was
+      // tried previously but its large block size (≥11px) is dominated by paper pixels when
+      // lines are thin, causing marks to fall below the local threshold.
+      _cv.threshold(blurred, binary, 0, 255, _cv.THRESH_BINARY_INV | _cv.THRESH_OTSU);
     } else {
       _cv.threshold(blurred, binary, settings.threshold as number, 255, _cv.THRESH_BINARY_INV);
     }

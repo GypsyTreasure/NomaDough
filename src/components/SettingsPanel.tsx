@@ -275,14 +275,24 @@ export function SettingsPanel() {
                 Auto
               </button>
               {!loopCountAuto && (
+                // Uncontrolled input: remounts fresh each time the auto/manual toggle switches,
+                // so the user can freely clear the field and retype without the value snapping
+                // back. Store is only updated when the typed value is a valid integer 1–20.
                 <input
+                  key="loop-count-manual"
                   type="number"
                   min={1}
                   max={20}
-                  value={loopCountValue}
+                  defaultValue={loopCountValue}
                   onChange={(e) => {
-                    const v = Math.max(1, Math.min(20, parseInt(e.target.value) || 1));
-                    updateSettings({ loopCount: v });
+                    const v = parseInt(e.target.value);
+                    if (!isNaN(v) && v >= 1 && v <= 20) updateSettings({ loopCount: v });
+                  }}
+                  onBlur={(e) => {
+                    const v = parseInt(e.target.value);
+                    const clamped = !isNaN(v) && v >= 1 ? Math.min(20, v) : 1;
+                    e.target.value = String(clamped);
+                    updateSettings({ loopCount: clamped });
                   }}
                   style={{
                     width: '48px',
