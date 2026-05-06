@@ -60,9 +60,7 @@ export function SettingsPanel() {
 
   const workerRef = useRef<Worker | null>(null);
 
-  const loopCountAuto = settings.loopCount === 'auto';
-  const loopCountValue = typeof settings.loopCount === 'number' ? settings.loopCount : 1;
-  const thresholdAuto = settings.threshold === 'auto';
+  const isManual = settings.detectionMode === 'manual';
 
   const handleDetect = useCallback(async () => {
     if (!imageFile) return;
@@ -100,17 +98,17 @@ export function SettingsPanel() {
         type: 'PROCESS_IMAGE',
         imageData,
         settings: {
-          threshold: thresholdAuto ? 'auto' : settings.threshold,
+          detectionMode: settings.detectionMode,
+          loopThresholds: settings.loopThresholds,
           smoothing: settings.smoothing,
           shapePerfection: settings.shapePerfection,
           targetHeightMm: settings.targetHeightMm,
-          loopCount: settings.loopCount,
         },
       });
     } catch (err: any) {
       setProcessingState('error', err.message ?? 'Failed to process image.');
     }
-  }, [imageFile, settings, thresholdAuto, setContourResult, setProcessingState]);
+  }, [imageFile, settings, setContourResult, setProcessingState]);
 
   const handleGenerate = useCallback(() => {
     if (!contourResult) return;
@@ -133,6 +131,22 @@ export function SettingsPanel() {
     const blob = exportAllSTLs(geometries, imageFile);
     setStlBlob(blob);
   }, [geometries, imageFile, setStlBlob]);
+
+  const updateThreshold = (index: number, value: number) => {
+    const next = [...settings.loopThresholds];
+    next[index] = value;
+    updateSettings({ loopThresholds: next });
+  };
+
+  const addLoop = () => {
+    updateSettings({ loopThresholds: [...settings.loopThresholds, 128] });
+  };
+
+  const removeLoop = (index: number) => {
+    if (settings.loopThresholds.length <= 1) return;
+    const next = settings.loopThresholds.filter((_, i) => i !== index);
+    updateSettings({ loopThresholds: next });
+  };
 
   const stlSizeKb = stlBlob ? (stlBlob.size / 1024).toFixed(1) : null;
   const hasGeometry = geometries.length > 0;
@@ -169,6 +183,20 @@ export function SettingsPanel() {
     marginBottom: '8px',
   });
 
+  const modeTabStyle = (active: boolean): React.CSSProperties => ({
+    flex: 1,
+    padding: '5px 0',
+    borderRadius: '4px',
+    border: 'none',
+    cursor: 'pointer',
+    fontSize: '11px',
+    fontFamily: 'monospace',
+    fontWeight: 600,
+    background: active ? '#22C59A' : 'transparent',
+    color: active ? '#0D1B2A' : '#7A9BB8',
+    transition: 'all 0.15s',
+  });
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', padding: '16px', overflowY: 'auto', height: '100%', gap: '0' }}>
 
@@ -180,63 +208,126 @@ export function SettingsPanel() {
           <ImageUpload />
         </div>
 
-        {/* Threshold */}
-        <div style={{ marginBottom: '10px' }}>
-          <div style={labelStyle}>
-            <span>Threshold</span>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+        {/* Detection Mode toggle */}
+        <div style={{ marginBottom: '12px' }}>
+          <div style={{ ...labelStyle, marginBottom: '8px' }}>
+            <span>Detection Mode</span>
+          </div>
+          <div style={{
+            display: 'flex',
+            gap: '2px',
+            background: '#0A1929',
+            borderRadius: '6px',
+            padding: '2px',
+            border: '1px solid #1A3558',
+            marginBottom: '10px',
+          }}>
+            <button
+              style={modeTabStyle(!isManual)}
+              onClick={() => updateSettings({ detectionMode: 'auto' })}
+            >
+              Auto
+            </button>
+            <button
+              style={modeTabStyle(isManual)}
+              onClick={() => updateSettings({ detectionMode: 'manual' })}
+            >
+              Manual
+            </button>
+          </div>
+
+          {!isManual ? (
+            <div style={{ color: '#7A9BB8', fontSize: '10px', fontFamily: 'monospace' }}>
+              Otsu's method auto-detects all loops and thresholds.
+            </div>
+          ) : (
+            /* Per-loop threshold sliders */
+            <div>
+              {settings.loopThresholds.map((thresh, i) => (
+                <div key={i} style={{ marginBottom: '10px' }}>
+                  <div style={{ ...labelStyle, marginBottom: '4px' }}>
+                    <span style={{ color: i === 0 ? '#7EC845' : '#FF8C00', fontWeight: 600 }}>
+                      Loop {i + 1}
+                    </span>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <input
+                        type="number"
+                        min={0}
+                        max={255}
+                        value={thresh}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value);
+                          if (!isNaN(v)) updateThreshold(i, Math.max(0, Math.min(255, v)));
+                        }}
+                        style={{
+                          width: '44px',
+                          padding: '2px 4px',
+                          borderRadius: '4px',
+                          border: '1px solid #1A3558',
+                          background: '#0D1B2A',
+                          color: '#F0F0F0',
+                          fontSize: '11px',
+                          fontFamily: 'monospace',
+                          textAlign: 'center',
+                        }}
+                      />
+                      {settings.loopThresholds.length > 1 && (
+                        <button
+                          onClick={() => removeLoop(i)}
+                          style={{
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            border: '1px solid #1A3558',
+                            background: 'transparent',
+                            color: '#7A9BB8',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            lineHeight: '1',
+                          }}
+                          title="Remove this loop"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={255}
+                    step={1}
+                    value={thresh}
+                    onChange={(e) => updateThreshold(i, parseInt(e.target.value))}
+                    style={{ accentColor: i === 0 ? '#7EC845' : '#FF8C00' }}
+                  />
+                </div>
+              ))}
               <button
-                onClick={() => updateSettings({ threshold: thresholdAuto ? 128 : 'auto' })}
+                onClick={addLoop}
+                disabled={settings.loopThresholds.length >= 10}
                 style={{
-                  padding: '2px 8px',
+                  width: '100%',
+                  padding: '5px',
                   borderRadius: '4px',
-                  border: `1px solid ${thresholdAuto ? '#22C59A' : '#1A3558'}`,
-                  background: thresholdAuto ? '#0F2A20' : 'transparent',
-                  color: thresholdAuto ? '#22C59A' : '#7A9BB8',
-                  cursor: 'pointer',
-                  fontSize: '10px',
+                  border: '1px dashed #1A3558',
+                  background: 'transparent',
+                  color: settings.loopThresholds.length < 10 ? '#7A9BB8' : '#1A3558',
+                  cursor: settings.loopThresholds.length < 10 ? 'pointer' : 'not-allowed',
+                  fontSize: '11px',
                   fontFamily: 'monospace',
+                  marginBottom: '4px',
                 }}
               >
-                Auto (adaptive)
+                + Add Loop
               </button>
-              {!thresholdAuto && (
-                // Number input for precise entry — shows the exact value and accepts typed numbers
-                <input
-                  type="number"
-                  min={0}
-                  max={255}
-                  value={typeof settings.threshold === 'number' ? settings.threshold : 128}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value);
-                    if (!isNaN(v)) updateSettings({ threshold: Math.max(0, Math.min(255, v)) });
-                  }}
-                  style={{
-                    width: '44px',
-                    padding: '2px 4px',
-                    borderRadius: '4px',
-                    border: '1px solid #1A3558',
-                    background: '#0D1B2A',
-                    color: '#F0F0F0',
-                    fontSize: '11px',
-                    fontFamily: 'monospace',
-                    textAlign: 'center',
-                  }}
-                />
-              )}
+              <div style={{ color: '#1A3558', fontSize: '10px', fontFamily: 'monospace' }}>
+                Each loop runs a separate detection pass with its threshold.
+              </div>
             </div>
-          </div>
-          {!thresholdAuto && (
-            // Range slider alongside the number input — both control the same value
-            <input
-              type="range" min={0} max={255} step={1}
-              value={typeof settings.threshold === 'number' ? settings.threshold : 128}
-              onChange={(e) => updateSettings({ threshold: parseInt(e.target.value) })}
-            />
           )}
         </div>
 
-        {/* Target shape height — here because it feeds into Detect Contour */}
+        {/* Target shape height */}
         <div style={{ marginBottom: '10px' }}>
           <div style={labelStyle}>
             <span>Target shape height</span>
@@ -276,66 +367,6 @@ export function SettingsPanel() {
             value={settings.shapePerfection}
             onChange={(e) => updateSettings({ shapePerfection: parseFloat(e.target.value) })}
           />
-        </div>
-
-        {/* Loop Count */}
-        <div style={{ marginBottom: '12px' }}>
-          <div style={labelStyle}>
-            <span>Loop count</span>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              <button
-                onClick={() => updateSettings({ loopCount: loopCountAuto ? loopCountValue : 'auto' })}
-                style={{
-                  padding: '2px 8px',
-                  borderRadius: '4px',
-                  border: `1px solid ${loopCountAuto ? '#22C59A' : '#1A3558'}`,
-                  background: loopCountAuto ? '#0F2A20' : 'transparent',
-                  color: loopCountAuto ? '#22C59A' : '#7A9BB8',
-                  cursor: 'pointer',
-                  fontSize: '10px',
-                  fontFamily: 'monospace',
-                }}
-              >
-                Auto
-              </button>
-              {!loopCountAuto && (
-                // Uncontrolled input: remounts fresh each time the auto/manual toggle switches,
-                // so the user can freely clear the field and retype without the value snapping
-                // back. Store is only updated when the typed value is a valid integer 1–20.
-                <input
-                  key="loop-count-manual"
-                  type="number"
-                  min={1}
-                  max={20}
-                  defaultValue={loopCountValue}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value);
-                    if (!isNaN(v) && v >= 1 && v <= 20) updateSettings({ loopCount: v });
-                  }}
-                  onBlur={(e) => {
-                    const v = parseInt(e.target.value);
-                    const clamped = !isNaN(v) && v >= 1 ? Math.min(20, v) : 1;
-                    e.target.value = String(clamped);
-                    updateSettings({ loopCount: clamped });
-                  }}
-                  style={{
-                    width: '48px',
-                    padding: '2px 4px',
-                    borderRadius: '4px',
-                    border: '1px solid #1A3558',
-                    background: '#0D1B2A',
-                    color: '#F0F0F0',
-                    fontSize: '11px',
-                    fontFamily: 'monospace',
-                    textAlign: 'center',
-                  }}
-                />
-              )}
-            </div>
-          </div>
-          <div style={{ color: '#7A9BB8', fontSize: '10px', marginTop: '2px', fontFamily: 'monospace' }}>
-            {loopCountAuto ? 'Auto detects all shapes.' : 'Set manually if auto picks up noise.'}
-          </div>
         </div>
 
         <button

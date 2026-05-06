@@ -96,6 +96,7 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     await cvReady;
     const _cv = (self as any).cv;
 
+    // ── Shared preprocessing ─────────────────────────────────────────────────
     const src = _cv.matFromImageData(imageData);
     const gray = new _cv.Mat();
     _cv.cvtColor(src, gray, _cv.COLOR_RGBA2GRAY);
@@ -110,111 +111,6 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
 
     const blurred = new _cv.Mat();
     _cv.GaussianBlur(enhanced, blurred, new _cv.Size(7, 7), 0);
-
-    const binary = new _cv.Mat();
-    if (settings.threshold === 'auto') {
-      // Otsu's method finds the optimal global threshold by maximising inter-class variance
-      // between the two histogram peaks (paper vs. ink). It works reliably for uniform-
-      // background images (grey, white, cream paper + pencil/pen). Adaptive threshold was
-      // tried previously but its large block size (≥11px) is dominated by paper pixels when
-      // lines are thin, causing marks to fall below the local threshold.
-      _cv.threshold(blurred, binary, 0, 255, _cv.THRESH_BINARY_INV | _cv.THRESH_OTSU);
-    } else {
-      _cv.threshold(blurred, binary, settings.threshold as number, 255, _cv.THRESH_BINARY_INV);
-    }
-
-    // ── Rule 1: adaptive gap-filling ─────────────────────────────────────────
-    // Estimate average pen radius via distance transform of the ink mask.
-    // distanceTransform gives each ink pixel its distance to the nearest paper pixel,
-    // so the mean over ink pixels = average pen radius.
-    // We correct for the large number of background (paper) zeros in the overall mean:
-    //   mean_ink = mean_all × total_pixels / ink_pixels
-    const dist = new _cv.Mat();
-    _cv.distanceTransform(binary, dist, _cv.DIST_L2, 5);
-    const fgCount = _cv.countNonZero(binary);
-    const totalPx = binary.rows * binary.cols;
-    const rawMeanDist: number = _cv.mean(dist)[0];
-    const penRadius = fgCount > 100 ? (rawMeanDist * totalPx / fgCount) : 2.0;
-    const penThickness = Math.max(2.0, penRadius * 2.0);
-    dist.delete();
-
-    // Close gaps up to 10× pen thickness, capped at 25px.
-    // A 25px kernel closes realistic pencil gaps (5–20px) in ~1s on a 1500×2000px image.
-    // Larger values cause multi-second hangs (O(k² × pixels)) and merge nearby separate
-    // shapes — the inner circle / triangle would be bridged into the outer outline.
-    let closeKernelSize = Math.round(penThickness * 10);
-    if (closeKernelSize % 2 === 0) closeKernelSize += 1;
-    closeKernelSize = Math.max(5, Math.min(closeKernelSize, 25));
-
-    const kernel = _cv.getStructuringElement(
-      _cv.MORPH_ELLIPSE,
-      new _cv.Size(closeKernelSize, closeKernelSize)
-    );
-    const closed = new _cv.Mat();
-    _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, kernel, new _cv.Point(-1, -1), 1);
-    kernel.delete();
-
-    const contours = new _cv.MatVector();
-    const hierarchy = new _cv.Mat();
-    _cv.findContours(closed, contours, hierarchy, _cv.RETR_EXTERNAL, _cv.CHAIN_APPROX_TC89_KCOS);
-
-    // Collect all contours with area >= 500px²
-    const validContours: Array<{ idx: number; area: number }> = [];
-    for (let i = 0; i < contours.size(); i++) {
-      const area = _cv.contourArea(contours.get(i));
-      if (area >= 500) validContours.push({ idx: i, area });
-    }
-
-    if (validContours.length === 0) {
-      throw new Error('No shape detected. Ensure the drawing has a clear closed outline on a light background.');
-    }
-
-    // Sort by area descending — largest first
-    validContours.sort((a, b) => b.area - a.area);
-
-    // Check main contour is not border-filling
-    const mainRect = _cv.boundingRect(contours.get(validContours[0].idx));
-    const imageArea = imageData.width * imageData.height;
-    if (mainRect.width * mainRect.height > imageArea * 0.85) {
-      throw new Error('Threshold too low — the entire image border was detected. Try increasing the threshold.');
-    }
-
-    // ── Rule 2: color-similarity filter ──────────────────────────────────────
-    // All loops drawn by the same pen/pencil have very similar grayscale values.
-    // Sample mean intensity along each contour in the normalized gray image and
-    // reject any contour whose average ink colour differs by more than 40 levels
-    // from the main (largest-area) contour. This removes noise from paper texture,
-    // shadows, or other incidental marks detected at the threshold edge.
-    function sampleIntensity(contourIdx: number): number {
-      const mat = contours.get(contourIdx);
-      const n = mat.rows;
-      const step = Math.max(1, Math.floor(n / 80));
-      let sum = 0, cnt = 0;
-      for (let i = 0; i < n; i += step) {
-        const px = mat.data32S[i * 2];
-        const py = mat.data32S[i * 2 + 1];
-        if (px >= 0 && px < gray.cols && py >= 0 && py < gray.rows) {
-          sum += gray.data[py * gray.cols + px];
-          cnt++;
-        }
-      }
-      return cnt > 0 ? sum / cnt : 128;
-    }
-
-    const mainIntensity = sampleIntensity(validContours[0].idx);
-    const colorFiltered = validContours.filter((c, i) => {
-      if (i === 0) return true;
-      return Math.abs(sampleIntensity(c.idx) - mainIntensity) <= 40;
-    });
-
-    // Apply loopCount selection
-    let selected: typeof colorFiltered;
-    if (settings.loopCount === 'auto') {
-      const areaThreshold = colorFiltered[0].area * 0.05;
-      selected = colorFiltered.filter(c => c.area >= areaThreshold);
-    } else {
-      selected = colorFiltered.slice(0, settings.loopCount as number);
-    }
 
     const epsilon = 2.0 + settings.shapePerfection * 2.0;
 
@@ -243,47 +139,174 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       }
 
       // Stage 2: corner-preserving shape perfection — only active when shapePerfection > 0.
-      // At sp=0 this is skipped entirely; calling it at sp=0 would still apply 2 Chaikin
-      // iterations to non-corner segments (corner threshold 120° ≫ typical 90° bend),
-      // producing rounded corners and kinks even when the user expects the raw outline.
       if (settings.shapePerfection > 0) {
         pts = cornerPreservingSmooth(pts, settings.shapePerfection);
       }
       return pts;
     }
 
-    // Process all selected contours into pixel-space point arrays
-    const allPixelPoints = selected.map(c => processContour(contours.get(c.idx)));
-
-    // ── Rule 3: self-proximity filter (inner contours only) ───────────────────
-    // A valid drawn outline never has two non-adjacent points closer than 10×
-    // pen thickness to each other. Contours that violate this are noise artefacts
-    // (e.g. morphology-created figure-8 blobs).
-    const selfProxMinDistSq = Math.pow(penThickness * 10, 2);
-    function hasSelfProximity(pts: Array<{ x: number; y: number }>): boolean {
-      const n = pts.length;
-      if (n < 6) return false;
-      // Exclude pairs that are ≤15% of the contour apart (adjacent in the loop)
-      const minSep = Math.max(3, Math.floor(n * 0.15));
-      const step = Math.max(1, Math.floor(n / 80));
-      for (let i = 0; i < n; i += step) {
-        for (let j = i + minSep; j <= i + n - minSep; j += step) {
-          const jj = j % n;
-          const dx = pts[i].x - pts[jj].x;
-          const dy = pts[i].y - pts[jj].y;
-          if (dx * dx + dy * dy < selfProxMinDistSq) return true;
-        }
+    // ── Helper: threshold → morph close → contours ───────────────────────────
+    function thresholdAndClose(threshValue: number | 'otsu'): {
+      contours: any; hierarchy: any; penThickness: number;
+    } {
+      const binary = new _cv.Mat();
+      if (threshValue === 'otsu') {
+        _cv.threshold(blurred, binary, 0, 255, _cv.THRESH_BINARY_INV | _cv.THRESH_OTSU);
+      } else {
+        _cv.threshold(blurred, binary, threshValue, 255, _cv.THRESH_BINARY_INV);
       }
-      return false;
+
+      // Estimate average pen radius via distance transform
+      const dist = new _cv.Mat();
+      _cv.distanceTransform(binary, dist, _cv.DIST_L2, 5);
+      const fgCount = _cv.countNonZero(binary);
+      const totalPx = binary.rows * binary.cols;
+      const rawMeanDist: number = _cv.mean(dist)[0];
+      const penRadius = fgCount > 100 ? (rawMeanDist * totalPx / fgCount) : 2.0;
+      const penThickness = Math.max(2.0, penRadius * 2.0);
+      dist.delete();
+
+      // Close gaps up to 10× pen thickness, capped at 25px.
+      let closeKernelSize = Math.round(penThickness * 10);
+      if (closeKernelSize % 2 === 0) closeKernelSize += 1;
+      closeKernelSize = Math.max(5, Math.min(closeKernelSize, 25));
+
+      const kernel = _cv.getStructuringElement(
+        _cv.MORPH_ELLIPSE,
+        new _cv.Size(closeKernelSize, closeKernelSize)
+      );
+      const closed = new _cv.Mat();
+      _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, kernel, new _cv.Point(-1, -1), 1);
+      kernel.delete();
+      binary.delete();
+
+      const contours = new _cv.MatVector();
+      const hierarchy = new _cv.Mat();
+      _cv.findContours(closed, contours, hierarchy, _cv.RETR_EXTERNAL, _cv.CHAIN_APPROX_TC89_KCOS);
+      closed.delete();
+
+      return { contours, hierarchy, penThickness };
     }
 
-    // Main contour is always kept; inner contours that fail Rule 3 are dropped.
-    const validPixelPoints = [allPixelPoints[0]];
-    for (let k = 1; k < allPixelPoints.length; k++) {
-      if (!hasSelfProximity(allPixelPoints[k])) validPixelPoints.push(allPixelPoints[k]);
+    let validPixelPoints: Array<Array<{ x: number; y: number }>>;
+
+    if (settings.detectionMode === 'auto') {
+      // ── Auto mode: single Otsu pass, apply all three rules ──────────────────
+      const { contours, hierarchy, penThickness } = thresholdAndClose('otsu');
+
+      // Collect all contours with area >= 500px²
+      const validContours: Array<{ idx: number; area: number }> = [];
+      for (let i = 0; i < contours.size(); i++) {
+        const area = _cv.contourArea(contours.get(i));
+        if (area >= 500) validContours.push({ idx: i, area });
+      }
+
+      if (validContours.length === 0) {
+        throw new Error('No shape detected. Ensure the drawing has a clear closed outline on a light background.');
+      }
+
+      // Sort by area descending — largest first
+      validContours.sort((a, b) => b.area - a.area);
+
+      // Check main contour is not border-filling
+      const mainRect = _cv.boundingRect(contours.get(validContours[0].idx));
+      const imageArea = imageData.width * imageData.height;
+      if (mainRect.width * mainRect.height > imageArea * 0.85) {
+        throw new Error('Threshold too low — the entire image border was detected. Try switching to manual mode and adjusting the threshold.');
+      }
+
+      // ── Rule 2: color-similarity filter ────────────────────────────────────
+      function sampleIntensity(contourIdx: number): number {
+        const mat = contours.get(contourIdx);
+        const n = mat.rows;
+        const step = Math.max(1, Math.floor(n / 80));
+        let sum = 0, cnt = 0;
+        for (let i = 0; i < n; i += step) {
+          const px = mat.data32S[i * 2];
+          const py = mat.data32S[i * 2 + 1];
+          if (px >= 0 && px < gray.cols && py >= 0 && py < gray.rows) {
+            sum += gray.data[py * gray.cols + px];
+            cnt++;
+          }
+        }
+        return cnt > 0 ? sum / cnt : 128;
+      }
+
+      const mainIntensity = sampleIntensity(validContours[0].idx);
+      const colorFiltered = validContours.filter((c, i) => {
+        if (i === 0) return true;
+        return Math.abs(sampleIntensity(c.idx) - mainIntensity) <= 40;
+      });
+
+      // Auto: keep all contours whose area >= 5% of main
+      const areaThreshold = colorFiltered[0].area * 0.05;
+      const selected = colorFiltered.filter(c => c.area >= areaThreshold);
+
+      const allPixelPoints = selected.map(c => processContour(contours.get(c.idx)));
+
+      contours.delete();
+      hierarchy.delete();
+
+      // ── Rule 3: self-proximity filter (inner contours only) ─────────────────
+      const selfProxMinDistSq = Math.pow(penThickness * 10, 2);
+      function hasSelfProximity(pts: Array<{ x: number; y: number }>): boolean {
+        const n = pts.length;
+        if (n < 6) return false;
+        const minSep = Math.max(3, Math.floor(n * 0.15));
+        const step = Math.max(1, Math.floor(n / 80));
+        for (let i = 0; i < n; i += step) {
+          for (let j = i + minSep; j <= i + n - minSep; j += step) {
+            const jj = j % n;
+            const dx = pts[i].x - pts[jj].x;
+            const dy = pts[i].y - pts[jj].y;
+            if (dx * dx + dy * dy < selfProxMinDistSq) return true;
+          }
+        }
+        return false;
+      }
+
+      // Main contour always kept; inner contours that fail Rule 3 are dropped
+      validPixelPoints = [allPixelPoints[0]];
+      for (let k = 1; k < allPixelPoints.length; k++) {
+        if (!hasSelfProximity(allPixelPoints[k])) validPixelPoints.push(allPixelPoints[k]);
+      }
+
+    } else {
+      // ── Manual mode: one pass per user-supplied threshold ────────────────────
+      validPixelPoints = [];
+      const imageArea = imageData.width * imageData.height;
+
+      for (const thresh of settings.loopThresholds) {
+        const { contours, hierarchy } = thresholdAndClose(thresh);
+
+        // Pick the largest valid contour from this threshold pass
+        let bestIdx = -1, bestArea = 0;
+        for (let i = 0; i < contours.size(); i++) {
+          const area = _cv.contourArea(contours.get(i));
+          if (area >= 500 && area > bestArea) {
+            bestArea = area;
+            bestIdx = i;
+          }
+        }
+
+        if (bestIdx >= 0) {
+          // Skip border-filling results
+          const rect = _cv.boundingRect(contours.get(bestIdx));
+          if (rect.width * rect.height <= imageArea * 0.85) {
+            validPixelPoints.push(processContour(contours.get(bestIdx)));
+          }
+        }
+
+        contours.delete();
+        hierarchy.delete();
+      }
+
+      if (validPixelPoints.length === 0) {
+        throw new Error('No shapes detected with the current thresholds. Try lowering the threshold values.');
+      }
     }
 
-    // Compute scale + center from main contour only — all others share the same transform
+    // ── Common: compute scale from main contour, build result ────────────────
     const mainPixelPoints = validPixelPoints[0];
     const mainYs = mainPixelPoints.map(p => p.y);
     const mainXs = mainPixelPoints.map(p => p.x);
@@ -300,8 +323,7 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     const scaleContour = (pts: Array<{ x: number; y: number }>) =>
       pts.map(p => ({ x: (p.x - cx_px) * scaleFactor, y: (p.y - cy_px) * scaleFactor }));
 
-    // kernel and dist are already deleted inline above
-    [src, gray, enhanced, blurred, binary, closed, contours, hierarchy].forEach((m) => {
+    [src, gray, enhanced, blurred].forEach((m) => {
       try { m.delete(); } catch (_) {}
     });
     try { clahe.delete(); } catch (_) {}

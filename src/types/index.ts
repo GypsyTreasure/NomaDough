@@ -7,10 +7,10 @@ export interface CutterProfile {
 export interface AppSettings {
   targetHeightMm: number;
   smoothing: number;        // Chaikin iterations 0–10
-  shapePerfection: number;  // 0.0 (organic/curved) to 1.0 (geometric/straight), default 0.3
-  threshold: number | 'auto';
+  shapePerfection: number;  // 0.0 (organic/curved) to 1.0 (geometric/straight)
   cutterProfile: CutterProfile;
-  loopCount: number | 'auto'; // 'auto' = detect all, number = detect exactly N loops
+  detectionMode: 'auto' | 'manual';
+  loopThresholds: number[]; // manual: one per loop; auto: unused
 }
 
 export interface ContourResult {
@@ -27,7 +27,13 @@ export interface ContourResult {
 export interface CVWorkerMessage {
   type: 'PROCESS_IMAGE';
   imageData: ImageData;
-  settings: Pick<AppSettings, 'threshold' | 'smoothing' | 'shapePerfection' | 'targetHeightMm' | 'loopCount'>;
+  settings: {
+    smoothing: number;
+    shapePerfection: number;
+    targetHeightMm: number;
+    detectionMode: 'auto' | 'manual';
+    loopThresholds: number[]; // manual: N values for N loops; auto: ignored
+  };
 }
 
 export interface CVWorkerResult {
