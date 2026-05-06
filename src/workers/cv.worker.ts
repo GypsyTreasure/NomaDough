@@ -138,11 +138,13 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     const penThickness = Math.max(2.0, penRadius * 2.0);
     dist.delete();
 
-    // Close gaps up to 10× pen thickness (bridges minor drawing gaps; Rule 1).
-    // An ellipse kernel avoids rectangular corner artifacts.
+    // Close gaps up to 10× pen thickness, capped at 25px.
+    // A 25px kernel closes realistic pencil gaps (5–20px) in ~1s on a 1500×2000px image.
+    // Larger values cause multi-second hangs (O(k² × pixels)) and merge nearby separate
+    // shapes — the inner circle / triangle would be bridged into the outer outline.
     let closeKernelSize = Math.round(penThickness * 10);
     if (closeKernelSize % 2 === 0) closeKernelSize += 1;
-    closeKernelSize = Math.max(5, Math.min(closeKernelSize, 99));
+    closeKernelSize = Math.max(5, Math.min(closeKernelSize, 25));
 
     const kernel = _cv.getStructuringElement(
       _cv.MORPH_ELLIPSE,
