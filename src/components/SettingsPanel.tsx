@@ -9,6 +9,7 @@ import { exportAllSTLs, buildExportFilename } from '../utils/exporter';
 import { fileToImageData } from '../utils/cv-helpers';
 import type { CVWorkerResult, CVWorkerError } from '../types';
 
+
 const labelStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
@@ -44,6 +45,7 @@ export function SettingsPanel() {
   const settings = useAppStore((s) => s.settings);
   const updateProfile = useAppStore((s) => s.updateProfile);
   const updateSettings = useAppStore((s) => s.updateSettings);
+  const updateRibSettings = useAppStore((s) => s.updateRibSettings);
   const imageFile = useAppStore((s) => s.imageFile);
   const imageUrl = useAppStore((s) => s.imageUrl);
   const processingState = useAppStore((s) => s.processingState);
@@ -115,7 +117,7 @@ export function SettingsPanel() {
     setIsGenerating(true);
     setTimeout(() => {
       try {
-        const geos = generateAllCutterGeometries(contourResult, settings.cutterProfile);
+        const geos = generateAllCutterGeometries(contourResult, settings.cutterProfile, settings.ribSettings);
         setGeometries(geos);
         setStlBlob(null);
       } catch (err: any) {
@@ -124,7 +126,7 @@ export function SettingsPanel() {
         setIsGenerating(false);
       }
     }, 0);
-  }, [contourResult, settings.cutterProfile, setGeometries, setStlBlob, setIsGenerating]);
+  }, [contourResult, settings.cutterProfile, settings.ribSettings, setGeometries, setStlBlob, setIsGenerating]);
 
   const handleExport = useCallback(() => {
     if (geometries.length === 0) return;
@@ -150,6 +152,8 @@ export function SettingsPanel() {
 
   const stlSizeKb = stlBlob ? (stlBlob.size / 1024).toFixed(1) : null;
   const hasGeometry = geometries.length > 0;
+  const { ribSettings } = settings;
+  const ribsDisabled = !ribSettings.enabled;
 
   const btnPrimary = (enabled: boolean): React.CSSProperties => ({
     width: '100%',
@@ -423,9 +427,70 @@ export function SettingsPanel() {
         <ProfileDiagram />
       </div>
 
-      {/* 3. Generate & Export */}
+      {/* 3. Reinforcement Ribs */}
+      <div style={sectionStyle}>
+        <div style={sectionTitle}>3 · Reinforcement Ribs</div>
+
+        {/* Enable toggle */}
+        <div style={{ marginBottom: '12px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={ribSettings.enabled}
+              onChange={(e) => updateRibSettings({ enabled: e.target.checked })}
+              style={{ accentColor: '#22C59A', width: '14px', height: '14px' }}
+            />
+            <span style={{ color: ribSettings.enabled ? '#F0F0F0' : '#7A9BB8', fontSize: '12px' }}>
+              Add bottom ribs
+            </span>
+          </label>
+        </div>
+
+        {/* Grid spacing */}
+        <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={labelStyle}>
+            <span>Rib spacing</span>
+            <span style={valueStyle}>{ribSettings.spacing} mm</span>
+          </div>
+          <input
+            type="range" min={5} max={50} step={1}
+            value={ribSettings.spacing}
+            disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ spacing: parseInt(e.target.value) })}
+          />
+        </div>
+
+        {/* Grid angle */}
+        <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={labelStyle}>
+            <span>Rib angle</span>
+            <span style={valueStyle}>{ribSettings.angle}°</span>
+          </div>
+          <input
+            type="range" min={0} max={90} step={5}
+            value={ribSettings.angle}
+            disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ angle: parseInt(e.target.value) })}
+          />
+          <div style={{ color: '#1A3558', fontSize: '10px', fontFamily: 'monospace', marginTop: '2px' }}>
+            0° = parallel · 45° = diagonal · 90° = perpendicular
+          </div>
+        </div>
+
+        {/* Read-only info */}
+        <div style={{ opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={{ color: '#7A9BB8', fontSize: '11px', fontFamily: 'monospace', marginBottom: '2px' }}>
+            Rib height: <span style={{ color: '#F0F0F0' }}>3 mm</span> (fixed)
+          </div>
+          <div style={{ color: '#7A9BB8', fontSize: '11px', fontFamily: 'monospace' }}>
+            Rib width: <span style={{ color: '#F0F0F0' }}>{ribSettings.ribWidth.toFixed(1)} mm</span> (matches base width)
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Generate & Export */}
       <div>
-        <div style={sectionTitle}>3 · Generate & Export</div>
+        <div style={sectionTitle}>4 · Generate & Export</div>
 
         <button
           onClick={handleGenerate}
