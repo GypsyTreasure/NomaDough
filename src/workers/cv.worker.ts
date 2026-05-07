@@ -20,17 +20,74 @@ if (typeof importScripts === 'function') {
     .catch(err => console.error('[cv.worker] OpenCV load failed:', err));
 }
 
-function chaikin(pts: {x:number;y:number}[], iters: number): {x:number;y:number}[] {
-  for (let k = 0; k < iters; k++) {
-    const out: typeof pts = [];
-    const n = pts.length;
-    for (let i = 0; i < n; i++) {
-      const a = pts[i], b = pts[(i + 1) % n];
-      out.push({ x: 0.75*a.x + 0.25*b.x, y: 0.75*a.y + 0.25*b.y });
-      out.push({ x: 0.25*a.x + 0.75*b.x, y: 0.25*a.y + 0.75*b.y });
-    }
-    pts = out;
+function cornerPreservingSmooth(
+  points: Array<{x: number, y: number}>,
+  shapePerfection: number
+): Array<{x: number, y: number}> {
+  if (points.length < 4) return points;
+
+  // sp=0 (organic): high threshold → only sharp spikes preserved, curves smoothed freely
+  // sp=1 (geometric): low threshold → even gentle angles treated as corners, fully preserved
+  const cornerThresholdDeg = 120 - shapePerfection * 100; // 120° at 0 → 20° at 1.0
+  const cornerThresholdRad = (cornerThresholdDeg * Math.PI) / 180;
+
+  function angle(p0: {x:number,y:number}, p1: {x:number,y:number}, p2: {x:number,y:number}): number {
+    const ax = p0.x - p1.x, ay = p0.y - p1.y;
+    const bx = p2.x - p1.x, by = p2.y - p1.y;
+    const dot = ax*bx + ay*by;
+    const magA = Math.hypot(ax, ay), magB = Math.hypot(bx, by);
+    if (magA === 0 || magB === 0) return 0;
+    return Math.acos(Math.max(-1, Math.min(1, dot / (magA * magB))));
   }
+
+  const n = points.length;
+  const isCorner = new Array(n).fill(false);
+  for (let i = 0; i < n; i++) {
+    const prev = points[(i - 1 + n) % n];
+    const curr = points[i];
+    const next = points[(i + 1) % n];
+    const bendAngle = Math.PI - angle(prev, curr, next);
+    if (bendAngle > cornerThresholdRad) isCorner[i] = true;
+  }
+
+  let pts = [...points];
+  for (let iter = 0; iter < 2; iter++) {
+    const newPts: typeof pts = [];
+    const n2 = pts.length;
+    for (let i = 0; i < n2; i++) {
+      const j = (i + 1) % n2;
+      if (isCorner[i % isCorner.length] || isCorner[j % isCorner.length]) {
+        newPts.push(pts[i]);
+      } else {
+        newPts.push({ x: 0.75*pts[i].x + 0.25*pts[j].x, y: 0.75*pts[i].y + 0.25*pts[j].y });
+        newPts.push({ x: 0.25*pts[i].x + 0.75*pts[j].x, y: 0.25*pts[i].y + 0.75*pts[j].y });
+      }
+    }
+    pts = newPts;
+  }
+
+  if (shapePerfection > 0.5) {
+    const snapStrength = (shapePerfection - 0.5) * 2;
+    pts = pts.map((p, i) => {
+      if (!isCorner[i % isCorner.length]) return p;
+      const prev = pts[(i - 1 + pts.length) % pts.length];
+      const next = pts[(i + 1) % pts.length];
+      const ax = p.x - prev.x, ay = p.y - prev.y;
+      const bx = next.x - p.x, by = next.y - p.y;
+      const angleDeg = Math.abs(Math.atan2(ay, ax) - Math.atan2(by, bx)) * 180 / Math.PI;
+      if (Math.abs(angleDeg - 90) < 20 || Math.abs(angleDeg - 270) < 20) {
+        const len = Math.hypot(ax, ay);
+        const snappedX = prev.x + Math.round(ax / len) * len;
+        const snappedY = prev.y + Math.round(ay / len) * len;
+        return {
+          x: p.x + (snappedX - p.x) * snapStrength,
+          y: p.y + (snappedY - p.y) * snapStrength,
+        };
+      }
+      return p;
+    });
+  }
+
   return pts;
 }
 
@@ -47,27 +104,51 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     await cvReady;
     const _cv = (self as any).cv;
 
-    // ── Step 1: True black-and-white conversion ───────────────────────────
+    // ── Step 1: Local-background subtraction → true ink mask ─────────────
     //
-    // normalize() stretches the pixel range to [0, 255] so that the darkest
-    // pixels in the image (ink, regardless of colour or darkness) map to 0
-    // and paper maps to 255.  A single global Otsu threshold then reliably
-    // separates all ink from all paper in one shot.
-    const src    = M(_cv.matFromImageData(imageData));
-    const gray   = M(new _cv.Mat());
+    // Global normalize+Otsu fails on photos: it stretches the contrast range
+    // including lighting gradients and paper-edge shadows, so the photo border
+    // gets detected as "ink".
+    //
+    // Fix: estimate the local paper colour at every pixel using a large
+    // Gaussian blur (the blur radius must be larger than the widest ink stroke
+    // but much smaller than the drawn shapes).  Subtracting the actual pixel
+    // from this estimate gives a "darkness map" that is positive only where ink
+    // is locally darker than the surrounding paper.  Lighting gradients and
+    // shadows are uniformly dark relative to their own neighbourhood, so they
+    // subtract to ≈ 0 and are never thresholded as ink.
+    const src      = M(_cv.matFromImageData(imageData));
+    const gray     = M(new _cv.Mat());
     _cv.cvtColor(src, gray, _cv.COLOR_RGBA2GRAY);
-    _cv.normalize(gray, gray, 0, 255, _cv.NORM_MINMAX);
 
-    const blurred = M(new _cv.Mat());
-    _cv.GaussianBlur(gray, blurred, new _cv.Size(3, 3), 0);
+    // Tiny blur kills single-pixel sensor noise before background estimation.
+    const smoothed = M(new _cv.Mat());
+    _cv.GaussianBlur(gray, smoothed, new _cv.Size(3, 3), 0);
+
+    // Background estimate: large Gaussian ≈ local paper colour.
+    // 51 px handles strokes up to ~25 px wide at typical phone-photo resolution.
+    const bgEst = M(new _cv.Mat());
+    _cv.GaussianBlur(smoothed, bgEst, new _cv.Size(51, 51), 0);
+
+    // darkness = bgEst − smoothed  (saturating: negative → 0)
+    // Paper:  bgEst ≈ smoothed  → 0
+    // Ink:    bgEst > smoothed  → positive
+    // Shadow: both are equally dark → still ≈ 0
+    const darkness = M(new _cv.Mat());
+    _cv.subtract(bgEst, smoothed, darkness);
+
+    // Normalise to [0, 255] so the threshold slider stays on a consistent scale.
+    _cv.normalize(darkness, darkness, 0, 255, _cv.NORM_MINMAX);
 
     const binary = M(new _cv.Mat());
     if (settings.threshold === 'auto') {
-      _cv.threshold(blurred, binary, 0, 255,
-        (_cv.THRESH_BINARY_INV | _cv.THRESH_OTSU));
+      // Otsu finds the paper/ink split in the darkness map automatically.
+      _cv.threshold(darkness, binary, 0, 255,
+        (_cv.THRESH_BINARY | _cv.THRESH_OTSU));
     } else {
-      _cv.threshold(blurred, binary,
-        settings.threshold as number, 255, _cv.THRESH_BINARY_INV);
+      // Manual: slider value is directly the darkness threshold (0–255).
+      _cv.threshold(darkness, binary,
+        settings.threshold as number, 255, _cv.THRESH_BINARY);
     }
 
     // ── Step 2: Morphological cleanup ─────────────────────────────────────
@@ -179,8 +260,31 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     const cx_px = (Math.min(...primXs) + Math.max(...primXs)) / 2;
     const cy_px = (Math.min(...primYs) + Math.max(...primYs)) / 2;
 
+    function applySmoothing(rawPts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+      let pts = [...rawPts];
+
+      // Stage 1: global Chaikin smoothing
+      for (let iter = 0; iter < settings.smoothing; iter++) {
+        const out: typeof pts = [];
+        const n = pts.length;
+        for (let i = 0; i < n; i++) {
+          const a = pts[i], b = pts[(i + 1) % n];
+          out.push({ x: 0.75*a.x + 0.25*b.x, y: 0.75*a.y + 0.25*b.y });
+          out.push({ x: 0.25*a.x + 0.75*b.x, y: 0.25*a.y + 0.75*b.y });
+        }
+        pts = out;
+      }
+
+      // Stage 2: corner-preserving shape perfection
+      if (settings.shapePerfection > 0) {
+        pts = cornerPreservingSmooth(pts, settings.shapePerfection);
+      }
+
+      return pts;
+    }
+
     const finalLoops = selected.map((loop, idx) => {
-      const smoothPx = chaikin(loop.pts, settings.smoothing);
+      const smoothPx = applySmoothing(loop.pts);
       const mmPts = smoothPx.map(p => ({
         x: (p.x - cx_px) * scale,
         y: (p.y - cy_px) * scale,
