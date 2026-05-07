@@ -71,9 +71,12 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     }
 
     // ── Step 2: Morphological cleanup ─────────────────────────────────────
+    // 5×5 CLOSE seals pen-lift gaps and open spiral terminations (up to ~3 px).
+    // 3×3 OPEN removes isolated noise dots without disturbing the closed shapes.
+    const k5     = M(_cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(5, 5)));
     const k3     = M(_cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(3, 3)));
     const closed = M(new _cv.Mat());
-    _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, k3, new _cv.Point(-1, -1), 1);
+    _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, k5, new _cv.Point(-1, -1), 1);
     const opened = M(new _cv.Mat());
     _cv.morphologyEx(closed, opened, _cv.MORPH_OPEN,  k3, new _cv.Point(-1, -1), 1);
 
@@ -131,7 +134,7 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       }
       approx.delete();
 
-      if (pts.length < 4) continue;
+      if (pts.length < 3) continue;  // triangles (3 pts) are valid shapes
 
       const xs = pts.map(p => p.x);
       const ys = pts.map(p => p.y);
