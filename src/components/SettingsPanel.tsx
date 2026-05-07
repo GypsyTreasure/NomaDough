@@ -113,7 +113,6 @@ export function SettingsPanel() {
           smoothing: settings.smoothing,
           shapePerfection: settings.shapePerfection,
           targetHeightMm: settings.targetHeightMm,
-          expectedLoops: settings.expectedLoops,
         },
       });
     } catch (err: any) {
