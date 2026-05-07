@@ -126,9 +126,15 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     _cv.GaussianBlur(gray, smoothed, new _cv.Size(3, 3), 0);
 
     // Background estimate: large Gaussian ≈ local paper colour.
-    // 51 px handles strokes up to ~25 px wide at typical phone-photo resolution.
+    // The kernel must span > 4× the widest ink stroke so the blur is not pulled
+    // down by the dark ink pixels.  Phone photos have strokes 30–60 px wide, so
+    // 51 px (fixed) is insufficient — scale with the shorter image dimension.
+    // Target: ~7% of the shorter side, min 51, always odd.
+    const shortSide  = Math.min(W, H);
+    const bgEstRaw   = Math.max(51, Math.round(shortSide * 0.07));
+    const bgEstK     = bgEstRaw % 2 === 0 ? bgEstRaw + 1 : bgEstRaw;
     const bgEst = M(new _cv.Mat());
-    _cv.GaussianBlur(smoothed, bgEst, new _cv.Size(51, 51), 0);
+    _cv.GaussianBlur(smoothed, bgEst, new _cv.Size(bgEstK, bgEstK), 0);
 
     // darkness = bgEst − smoothed  (saturating: negative → 0)
     // Paper:  bgEst ≈ smoothed  → 0
@@ -152,10 +158,16 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     }
 
     // ── Step 2: Morphological cleanup ─────────────────────────────────────
-    // 5×5 CLOSE seals pen-lift gaps and open spiral terminations (up to ~3 px).
-    // 3×3 OPEN removes isolated noise dots without disturbing the closed shapes.
-    const k5     = M(_cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(5, 5)));
-    const k3     = M(_cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(3, 3)));
+    // Kernel sizes scale with image resolution so pen-lift gaps that are tiny
+    // relative to the drawing (~1% of short side) get sealed regardless of
+    // whether the image is a small scan or a full-res phone photo.
+    // CLOSE seals small gaps; OPEN removes isolated noise dots.
+    const closeRaw = Math.max(5, Math.round(shortSide * 0.01));
+    const closeK   = closeRaw % 2 === 0 ? closeRaw + 1 : closeRaw;
+    const openRaw  = Math.max(3, Math.round(shortSide * 0.003));
+    const openK    = openRaw  % 2 === 0 ? openRaw  + 1 : openRaw;
+    const k5     = M(_cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(closeK, closeK)));
+    const k3     = M(_cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(openK, openK)));
     const closed = M(new _cv.Mat());
     _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, k5, new _cv.Point(-1, -1), 1);
     const opened = M(new _cv.Mat());
@@ -231,7 +243,7 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       cleanup();
       self.postMessage({
         type: 'ERROR',
-        message: 'No shape detected. Ensure the drawing has a clear outline on a lighter background, or adjust the threshold slider.',
+        message: 'No shape detected. Tips: (1) make sure the outline is fully closed — no gaps; (2) use dark ink on a lighter background; (3) try adjusting the threshold slider.',
       } as CVWorkerError);
       return;
     }
