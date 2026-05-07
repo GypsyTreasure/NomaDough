@@ -1,10 +1,20 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 
-function geometryToBlob(geometry: THREE.BufferGeometry): Blob {
+// Build a scene-graph group from one cutter geometry + its rib geometries so
+// STLExporter traverses all children and writes them into a single binary STL.
+function buildGroup(cutterGeo: THREE.BufferGeometry, ribGeos: THREE.BufferGeometry[]): THREE.Group {
+  const group = new THREE.Group();
+  group.add(new THREE.Mesh(cutterGeo));
+  for (const rib of ribGeos) {
+    group.add(new THREE.Mesh(rib));
+  }
+  return group;
+}
+
+function groupToBlob(group: THREE.Group): Blob {
   const exporter = new STLExporter();
-  const mesh = new THREE.Mesh(geometry);
-  const stlData = exporter.parse(mesh, { binary: true });
+  const stlData = exporter.parse(group, { binary: true });
   const blobPart = stlData instanceof DataView ? stlData.buffer as ArrayBuffer : stlData as string;
   return new Blob([blobPart], { type: 'application/octet-stream' });
 }
@@ -19,29 +29,34 @@ function triggerDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(link.href);
 }
 
-export function exportSTL(geometry: THREE.BufferGeometry, filename: string): Blob {
-  const blob = geometryToBlob(geometry);
-  triggerDownload(blob, filename);
-  return blob;
-}
-
-export function exportAllSTLs(geometries: THREE.BufferGeometry[], imageFile: File | null): Blob {
+export function exportAllSTLs(
+  geometries: THREE.BufferGeometry[],
+  ribGeometries: THREE.BufferGeometry[],
+  imageFile: File | null
+): Blob {
   if (geometries.length === 0) return new Blob([], { type: 'application/octet-stream' });
 
   if (geometries.length === 1) {
-    return exportSTL(geometries[0], buildExportFilename(imageFile));
+    // Single loop — one STL with cutter + all ribs
+    const group = buildGroup(geometries[0], ribGeometries);
+    const blob = groupToBlob(group);
+    triggerDownload(blob, buildExportFilename(imageFile));
+    return blob;
   }
 
-  // Multiple geometries — download each sequentially with 300ms delay
+  // Multiple loops — one STL per loop; ribs are distributed to the first loop
+  // (ribs span the whole bounding box so they logically belong to the main contour)
   const base = imageFile ? imageFile.name.replace(/\.[^.]+$/, '') : 'shape';
-  const blobs: Blob[] = geometries.map(g => geometryToBlob(g));
+  const blobs: Blob[] = geometries.map((geo, i) => {
+    const ribs = i === 0 ? ribGeometries : [];
+    return groupToBlob(buildGroup(geo, ribs));
+  });
 
   blobs.forEach((blob, i) => {
     const filename = `NomaDough-${base}-loop${i + 1}-by_NomaDirection.STL`;
     setTimeout(() => triggerDownload(blob, filename), i * 300);
   });
 
-  // Return the first blob as the representative blob for size display
   return blobs[0];
 }
 

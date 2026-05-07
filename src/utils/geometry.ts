@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CutterProfile, ContourResult, RibSettings } from '../types';
 
 export function buildProfileShape(profile: CutterProfile): THREE.Shape {
@@ -203,13 +202,16 @@ export function generateRibLinePositions(
 
 // ─── Main entry points ───────────────────────────────────────────────────────
 
+export interface CutterGenerationResult {
+  cutterGeometries: THREE.BufferGeometry[];
+  ribGeometries: THREE.BufferGeometry[];
+}
+
 export function generateAllCutterGeometries(
   contour: ContourResult,
   profile: CutterProfile,
-  ribs?: RibSettings
-): THREE.BufferGeometry[] {
-  const result: THREE.BufferGeometry[] = [];
-
+  ribSettings?: RibSettings
+): CutterGenerationResult {
   const allContours: ContourResult[] = [
     contour,
     ...contour.innerContours.map(inner => ({
@@ -221,23 +223,15 @@ export function generateAllCutterGeometries(
     })),
   ];
 
+  const cutterGeometries: THREE.BufferGeometry[] = [];
+  const ribGeometries: THREE.BufferGeometry[] = [];
+
   for (const c of allContours) {
-    const mainGeo = generateCutterGeometry(c, profile);
-
-    if (ribs?.enabled) {
-      const ribGeos = generateRibGeometriesForPoints(c.points, profile.b, ribs);
-      if (ribGeos.length > 0) {
-        const merged = mergeGeometries([mainGeo, ...ribGeos]);
-        if (merged) {
-          merged.computeVertexNormals();
-          result.push(merged);
-          continue;
-        }
-      }
+    cutterGeometries.push(generateCutterGeometry(c, profile));
+    if (ribSettings?.enabled) {
+      ribGeometries.push(...generateRibGeometriesForPoints(c.points, profile.b, ribSettings));
     }
-
-    result.push(mainGeo);
   }
 
-  return result;
+  return { cutterGeometries, ribGeometries };
 }

@@ -55,6 +55,8 @@ export function SettingsPanel() {
 
   const geometries = useGeometryStore((s) => s.geometries);
   const setGeometries = useGeometryStore((s) => s.setGeometries);
+  const ribGeometries = useGeometryStore((s) => s.ribGeometries);
+  const setRibGeometries = useGeometryStore((s) => s.setRibGeometries);
   const stlBlob = useGeometryStore((s) => s.stlBlob);
   const setStlBlob = useGeometryStore((s) => s.setStlBlob);
   const isGenerating = useGeometryStore((s) => s.isGenerating);
@@ -117,8 +119,11 @@ export function SettingsPanel() {
     setIsGenerating(true);
     setTimeout(() => {
       try {
-        const geos = generateAllCutterGeometries(contourResult, settings.cutterProfile, settings.ribSettings);
-        setGeometries(geos);
+        const { cutterGeometries, ribGeometries: ribs } = generateAllCutterGeometries(
+          contourResult, settings.cutterProfile, settings.ribSettings
+        );
+        setGeometries(cutterGeometries);
+        setRibGeometries(ribs);
         setStlBlob(null);
       } catch (err: any) {
         alert('3D generation failed. Try increasing smoothing or re-uploading image.\n\n' + (err.message ?? ''));
@@ -126,13 +131,13 @@ export function SettingsPanel() {
         setIsGenerating(false);
       }
     }, 0);
-  }, [contourResult, settings.cutterProfile, settings.ribSettings, setGeometries, setStlBlob, setIsGenerating]);
+  }, [contourResult, settings.cutterProfile, settings.ribSettings, setGeometries, setRibGeometries, setStlBlob, setIsGenerating]);
 
   const handleExport = useCallback(() => {
     if (geometries.length === 0) return;
-    const blob = exportAllSTLs(geometries, imageFile);
+    const blob = exportAllSTLs(geometries, ribGeometries, imageFile);
     setStlBlob(blob);
-  }, [geometries, imageFile, setStlBlob]);
+  }, [geometries, ribGeometries, imageFile, setStlBlob]);
 
   const updateThreshold = (index: number, value: number) => {
     const next = [...settings.loopThresholds];
