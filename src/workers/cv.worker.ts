@@ -6,19 +6,18 @@ const OPENCV_URL = 'https://docs.opencv.org/4.8.0/opencv.js';
 
 let resolveCV!: () => void;
 const cvReady = new Promise<void>((resolve) => { resolveCV = resolve; });
-
 (self as any).Module = { onRuntimeInitialized() { resolveCV(); } };
 
-// importScripts works in classic workers (production build).
-// Vite dev mode creates module workers where importScripts is unavailable —
-// fall back to fetch + indirect eval so both environments work.
+// Classic workers (production build) use importScripts.
+// Vite dev mode creates module workers where importScripts is unavailable
+// — fall back to fetch + indirect eval.
 if (typeof importScripts === 'function') {
   importScripts(OPENCV_URL);
 } else {
   fetch(OPENCV_URL)
     .then(r => r.text())
     .then(code => { (0, eval)(code); })
-    .catch(err => { console.error('[cv.worker] Failed to load OpenCV.js:', err); });
+    .catch(err => console.error('[cv.worker] OpenCV load failed:', err));
 }
 
 function chaikin(pts: {x:number;y:number}[], iters: number): {x:number;y:number}[] {
@@ -48,58 +47,51 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     await cvReady;
     const _cv = (self as any).cv;
 
-    // ── Step 1: Convert to true black-and-white ───────────────────────────
-    // Normalize contrast first so faint ink and dark ink are both driven to
-    // black, then apply a single global threshold to get a clean 2-colour
-    // image with no intermediate shades.
-
-    const src   = M(_cv.matFromImageData(imageData));
-    const gray  = M(new _cv.Mat());
+    // ── Step 1: True black-and-white conversion ───────────────────────────
+    //
+    // normalize() stretches the pixel range to [0, 255] so that the darkest
+    // pixels in the image (ink, regardless of colour or darkness) map to 0
+    // and paper maps to 255.  A single global Otsu threshold then reliably
+    // separates all ink from all paper in one shot.
+    const src    = M(_cv.matFromImageData(imageData));
+    const gray   = M(new _cv.Mat());
     _cv.cvtColor(src, gray, _cv.COLOR_RGBA2GRAY);
-
-    // Stretch the pixel range to [0, 255] so that the darkest pixels
-    // (ink) become 0 and the lightest (paper) become 255.  This makes
-    // faint loops visible to a single global threshold.
     _cv.normalize(gray, gray, 0, 255, _cv.NORM_MINMAX);
 
-    // Light blur to kill single-pixel noise without softening ink edges.
     const blurred = M(new _cv.Mat());
     _cv.GaussianBlur(gray, blurred, new _cv.Size(3, 3), 0);
 
-    // Binarise: anything darker than the threshold becomes white (ink),
-    // everything else black (background) — THRESH_BINARY_INV.
-    // Auto mode uses Otsu which finds the paper/ink valley automatically.
-    // Manual mode uses the user-supplied value on the normalised image.
     const binary = M(new _cv.Mat());
     if (settings.threshold === 'auto') {
       _cv.threshold(blurred, binary, 0, 255,
         (_cv.THRESH_BINARY_INV | _cv.THRESH_OTSU));
     } else {
       _cv.threshold(blurred, binary,
-        settings.threshold as number, 255,
-        _cv.THRESH_BINARY_INV);
+        settings.threshold as number, 255, _cv.THRESH_BINARY_INV);
     }
 
     // ── Step 2: Morphological cleanup ─────────────────────────────────────
-    // CLOSE seals small pen-lift gaps; OPEN removes isolated noise dots.
     const k3     = M(_cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(3, 3)));
     const closed = M(new _cv.Mat());
     _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, k3, new _cv.Point(-1, -1), 1);
     const opened = M(new _cv.Mat());
-    _cv.morphologyEx(closed, opened, _cv.MORPH_OPEN, k3, new _cv.Point(-1, -1), 1);
+    _cv.morphologyEx(closed, opened, _cv.MORPH_OPEN,  k3, new _cv.Point(-1, -1), 1);
 
-    // ── Step 3: Find all closed contours ─────────────────────────────────
-    // RETR_LIST returns every independent closed loop without hierarchy, so
-    // all shapes (outer and inner) are treated equally.
+    // ── Step 3: Find contours with 2-level hierarchy (RETR_CCOMP) ────────
+    //
+    // RETR_CCOMP puts the outer boundary of every ink stroke at level 0
+    // (parent == -1) and the inner-edge duplicate at level 1 (parent != -1).
+    // A shape that sits inside a hole (avocado pit inside body, A's inner
+    // triangle) is placed back at level 0 per the CCOMP spec.
+    // Filtering by parent == -1 therefore gives us exactly one contour per
+    // drawn element — no manual deduplication needed.
     const contours  = M(new _cv.MatVector());
     const hierarchy = M(new _cv.Mat());
     _cv.findContours(opened, contours, hierarchy,
-      _cv.RETR_LIST    ?? 1,
+      _cv.RETR_CCOMP     ?? 2,
       _cv.CHAIN_APPROX_SIMPLE ?? 2);
 
-    // ── Step 4: Filter and simplify each candidate loop ──────────────────
     const minArea = imageArea * 0.0005;
-    const diag    = Math.hypot(W, H);
 
     interface RawLoop {
       pts:  Array<{x: number; y: number}>;
@@ -111,24 +103,24 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     const raw: RawLoop[] = [];
 
     for (let i = 0; i < contours.size(); i++) {
+      // hierarchy layout per contour: [next, prev, first_child, parent]
+      const parent = hierarchy.data32S[i * 4 + 3];
+      if (parent !== -1) continue;   // skip inner stroke-edge duplicates
+
       const c    = contours.get(i);
       const area = _cv.contourArea(c);
       if (area < minArea) continue;
 
       const rect = _cv.boundingRect(c);
-      // Reject contours that span the entire image (photo border artefact).
       if (rect.x <= 2 && rect.y <= 2 &&
           rect.x + rect.width  >= W - 2 &&
           rect.y + rect.height >= H - 2) continue;
       if (rect.width * rect.height > imageArea * 0.92) continue;
 
       const perimeter = _cv.arcLength(c, true);
-      // Roughness: ratio of actual perimeter to ideal circular perimeter.
-      // Values > 6 indicate very jagged noise rather than a drawn shape.
-      const roughness = perimeter / (2 * Math.sqrt(Math.PI * area));
-      if (roughness > 6.0) continue;
+      // Roughness > 6 → too jagged to be a drawn shape (noise blob).
+      if (perimeter / (2 * Math.sqrt(Math.PI * area)) > 6.0) continue;
 
-      // Adaptive epsilon keeps large contours detailed and small ones smooth.
       const epsilon = Math.max(1.5, Math.min(0.005 * perimeter, 8.0));
       const approx  = new _cv.Mat();
       _cv.approxPolyDP(c, approx, epsilon, true);
@@ -151,67 +143,24 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       });
     }
 
-    // ── Step 5: Deduplication ─────────────────────────────────────────────
-    // Concentric dedup: adaptive-threshold creates inner + outer edge of
-    // each ink stroke as two concentric contours.  Keep the larger one.
-    const afterConcentric: RawLoop[] = [];
-    for (const loop of raw) {
-      let absorbed = false;
-      for (let k = 0; k < afterConcentric.length; k++) {
-        const kept = afterConcentric[k];
-        if (Math.hypot(loop.cx - kept.cx, loop.cy - kept.cy) < diag * 0.15) {
-          if (loop.area > kept.area) afterConcentric[k] = loop;
-          absorbed = true;
-          break;
-        }
-      }
-      if (!absorbed) afterConcentric.push(loop);
-    }
-
-    afterConcentric.sort((a, b) => b.area - a.area);
-
-    // Proximity dedup: smaller loop whose bounding box nearly coincides with
-    // a larger one and is less than half its area → remove.
-    function getBbox(pts: Array<{x:number;y:number}>) {
-      const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-      return { x1: Math.min(...xs), y1: Math.min(...ys),
-               x2: Math.max(...xs), y2: Math.max(...ys) };
-    }
-
-    const afterProximity: RawLoop[] = [];
-    for (const loop of afterConcentric) {
-      const bA = getBbox(loop.pts);
-      let redundant = false;
-      for (const kept of afterProximity) {
-        const bB = getBbox(kept.pts);
-        const gap = Math.max(0,
-          Math.max(bA.x1, bB.x1) - Math.min(bA.x2, bB.x2),
-          Math.max(bA.y1, bB.y1) - Math.min(bA.y2, bB.y2)
-        );
-        if (gap < 15 && loop.area < kept.area * 0.5) {
-          redundant = true;
-          break;
-        }
-      }
-      if (!redundant) afterProximity.push(loop);
-    }
-
-    if (afterProximity.length === 0) {
+    if (raw.length === 0) {
       cleanup();
       self.postMessage({
         type: 'ERROR',
-        message: 'No shape detected. Try adjusting the threshold slider or ensure the drawing has a clear outline.',
+        message: 'No shape detected. Ensure the drawing has a clear outline on a lighter background, or adjust the threshold slider.',
       } as CVWorkerError);
       return;
     }
 
-    // ── Step 6: Select up to expectedLoops results ────────────────────────
-    const take = settings.expectedLoops <= 0
-      ? afterProximity.length
-      : Math.min(settings.expectedLoops, afterProximity.length);
-    const selected = afterProximity.slice(0, take);
+    // ── Step 4: Select up to expectedLoops (largest first) ───────────────
+    raw.sort((a, b) => b.area - a.area);
 
-    // ── Step 7: Scale to mm and smooth ────────────────────────────────────
+    const take = settings.expectedLoops <= 0
+      ? raw.length
+      : Math.min(settings.expectedLoops, raw.length);
+    const selected = raw.slice(0, take);
+
+    // ── Step 5: Scale to mm and smooth ────────────────────────────────────
     const primary = selected[0];
     const primYs  = primary.pts.map(p => p.y);
     const primXs  = primary.pts.map(p => p.x);
