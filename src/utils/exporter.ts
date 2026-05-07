@@ -27,31 +27,11 @@ export function exportAllSTLs(
 ): Blob {
   if (geometries.length === 0) return new Blob([], { type: 'application/octet-stream' });
 
-  if (geometries.length === 1) {
-    // Single loop → merge cutter + all ribs into one body
-    const allGeos = ribGeometries.length > 0
-      ? [geometries[0], ...ribGeometries]
-      : [geometries[0]];
-    const blob = geometryToBlob(manualMergeGeometries(allGeos));
-    triggerDownload(blob, buildExportFilename(imageFile));
-    return blob;
-  }
-
-  // Multiple loops → one file per loop; all ribs go with loop 0
-  const base = imageFile ? imageFile.name.replace(/\.[^.]+$/, '') : 'shape';
-  const blobs: Blob[] = geometries.map((geo, i) => {
-    const loopGeos = i === 0 && ribGeometries.length > 0
-      ? [geo, ...ribGeometries]
-      : [geo];
-    return geometryToBlob(manualMergeGeometries(loopGeos));
-  });
-
-  blobs.forEach((blob, i) => {
-    const filename = `NomaDough-${base}-loop${i + 1}-by_NomaDirection.STL`;
-    setTimeout(() => triggerDownload(blob, filename), i * 300);
-  });
-
-  return blobs[0];
+  // Always merge all cutter loops + all ribs into a single body / single STL file
+  const merged = manualMergeGeometries([...geometries, ...ribGeometries]);
+  const blob = geometryToBlob(merged);
+  triggerDownload(blob, buildExportFilename(imageFile));
+  return blob;
 }
 
 export function buildExportFilename(imageFile: File | null): string {
