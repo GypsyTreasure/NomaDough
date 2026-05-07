@@ -1,14 +1,25 @@
 import type { CVWorkerMessage, CVWorkerResult, CVWorkerError, ContourResult } from '../types';
 
 declare function importScripts(...urls: string[]): void;
-declare const cv: any;
 
-const cvReady = new Promise<void>((resolve) => {
-  if (typeof cv !== 'undefined' && cv.Mat) { resolve(); return; }
-  (self as any).Module = { onRuntimeInitialized: () => resolve() };
-});
+const OPENCV_URL = 'https://docs.opencv.org/4.8.0/opencv.js';
 
-importScripts('https://docs.opencv.org/4.8.0/opencv.js');
+let resolveCV!: () => void;
+const cvReady = new Promise<void>((resolve) => { resolveCV = resolve; });
+
+(self as any).Module = { onRuntimeInitialized() { resolveCV(); } };
+
+// importScripts works in classic workers (production); in Vite dev mode the
+// worker is a module worker where importScripts is unavailable — fall back to
+// fetch + indirect eval so the same source works in both environments.
+if (typeof importScripts === 'function') {
+  importScripts(OPENCV_URL);
+} else {
+  fetch(OPENCV_URL)
+    .then(r => r.text())
+    .then(code => { (0, eval)(code); })
+    .catch(err => { console.error('Failed to load OpenCV.js:', err); });
+}
 
 function chaikin(pts: {x:number;y:number}[], iters: number): {x:number;y:number}[] {
   for (let k = 0; k < iters; k++) {
@@ -31,36 +42,50 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
   const imageArea = W * H;
   const mats: any[] = [];
   const M = (mat: any) => { mats.push(mat); return mat; };
+  const cleanup = () => mats.forEach(m => { try { m.delete(); } catch (_) {} });
 
   try {
     await cvReady;
+    const _cv = (self as any).cv;
 
-    const src    = M(cv.matFromImageData(imageData));
-    const gray   = M(new cv.Mat());
-    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-    const blurred = M(new cv.Mat());
-    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
-    const binary = M(new cv.Mat());
+    const src    = M(_cv.matFromImageData(imageData));
+    const gray   = M(new _cv.Mat());
+    _cv.cvtColor(src, gray, _cv.COLOR_RGBA2GRAY);
+    const blurred = M(new _cv.Mat());
+    _cv.GaussianBlur(gray, blurred, new _cv.Size(5, 5), 0);
+    const binary = M(new _cv.Mat());
 
     if (settings.threshold === 'auto') {
       const shortDim = Math.min(W, H);
       let blockSize = Math.max(11, Math.round(shortDim / 20));
       if (blockSize % 2 === 0) blockSize += 1;
-      cv.adaptiveThreshold(blurred, binary, 255,
-        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, blockSize, 8);
+      try {
+        _cv.adaptiveThreshold(blurred, binary, 255,
+          _cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+          _cv.THRESH_BINARY_INV,
+          blockSize, 8);
+      } catch {
+        // Fall back to Otsu if adaptiveThreshold fails
+        _cv.threshold(blurred, binary, 0, 255,
+          (_cv.THRESH_BINARY_INV | _cv.THRESH_OTSU));
+      }
     } else {
-      cv.threshold(blurred, binary, settings.threshold as number, 255, cv.THRESH_BINARY_INV);
+      _cv.threshold(blurred, binary, settings.threshold as number, 255,
+        _cv.THRESH_BINARY_INV);
     }
 
-    const k3     = M(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3)));
-    const closed = M(new cv.Mat());
-    cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, k3, new cv.Point(-1, -1), 1);
-    const opened = M(new cv.Mat());
-    cv.morphologyEx(closed, opened, cv.MORPH_OPEN, k3, new cv.Point(-1, -1), 1);
+    const k3     = M(_cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(3, 3)));
+    const closed = M(new _cv.Mat());
+    _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, k3, new _cv.Point(-1, -1), 1);
+    const opened = M(new _cv.Mat());
+    _cv.morphologyEx(closed, opened, _cv.MORPH_OPEN, k3, new _cv.Point(-1, -1), 1);
 
-    const contours  = M(new cv.MatVector());
-    const hierarchy = M(new cv.Mat());
-    cv.findContours(opened, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_TC89_KCOS);
+    const contours  = M(new _cv.MatVector());
+    const hierarchy = M(new _cv.Mat());
+    // RETR_LIST=1, CHAIN_APPROX_SIMPLE=2  (use numeric fallbacks for safety)
+    _cv.findContours(opened, contours, hierarchy,
+      _cv.RETR_LIST   ?? 1,
+      _cv.CHAIN_APPROX_SIMPLE ?? 2);
 
     const minArea = imageArea * 0.0005;
     const diag    = Math.hypot(W, H);
@@ -76,23 +101,26 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
 
     for (let i = 0; i < contours.size(); i++) {
       const c    = contours.get(i);
-      const area = cv.contourArea(c);
+      const area = _cv.contourArea(c);
       if (area < minArea) continue;
 
-      const rect = cv.boundingRect(c);
+      const rect = _cv.boundingRect(c);
+      // Skip frame-edge and near-full-image contours
       if (rect.x <= 2 && rect.y <= 2 &&
           rect.x + rect.width  >= W - 2 &&
           rect.y + rect.height >= H - 2) continue;
       if (rect.width * rect.height > imageArea * 0.92) continue;
 
-      const perimeter = cv.arcLength(c, true);
-      // Roughness filter: roughness > 4 means too jagged, skip
+      const perimeter = _cv.arcLength(c, true);
+      // Roughness: raw pixel contour perimeter vs ideal circular perimeter.
+      // >6 = very jagged noise blob; threshold relaxed from 4 because
+      // adaptive-threshold contours have more pixel-level staircase than Otsu.
       const roughness = perimeter / (2 * Math.sqrt(Math.PI * area));
-      if (roughness > 4.0) continue;
+      if (roughness > 6.0) continue;
 
       const epsilon = Math.max(1.5, Math.min(0.005 * perimeter, 8.0));
-      const approx  = new cv.Mat();
-      cv.approxPolyDP(c, approx, epsilon, true);
+      const approx  = new _cv.Mat();
+      _cv.approxPolyDP(c, approx, epsilon, true);
 
       const pts: Array<{x: number; y: number}> = [];
       for (let j = 0; j < approx.rows; j++) {
@@ -112,7 +140,7 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       });
     }
 
-    // Concentric dedup: same ink ring has two edges; keep the larger
+    // Concentric dedup: two edges of the same ink stroke → keep the larger
     const afterConcentric: RawLoop[] = [];
     for (const loop of raw) {
       let absorbed = false;
@@ -127,13 +155,15 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       if (!absorbed) afterConcentric.push(loop);
     }
 
-    // Proximity dedup: nearly-overlapping smaller sibling → remove
+    // Sort by area descending before proximity check
+    afterConcentric.sort((a, b) => b.area - a.area);
+
+    // Proximity dedup: nearly-touching smaller sibling → remove
     function getBbox(pts: Array<{x:number;y:number}>) {
       const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-      return { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
+      return { x1: Math.min(...xs), y1: Math.min(...ys),
+               x2: Math.max(...xs), y2: Math.max(...ys) };
     }
-
-    afterConcentric.sort((a, b) => b.area - a.area);
 
     const afterProximity: RawLoop[] = [];
     for (const loop of afterConcentric) {
@@ -154,8 +184,11 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     }
 
     if (afterProximity.length === 0) {
-      mats.forEach(m => { try { m.delete(); } catch (_) {} });
-      self.postMessage({ type: 'ERROR', message: 'No shape detected. Ensure a clear outline on a lighter background.' } as CVWorkerError);
+      cleanup();
+      self.postMessage({
+        type: 'ERROR',
+        message: 'No shape detected. Ensure a clear outline on a lighter background.',
+      } as CVWorkerError);
       return;
     }
 
@@ -166,13 +199,13 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     const selected = afterProximity.slice(0, take);
 
     // Scale using primary loop's pixel bounding box
-    const primary   = selected[0];
-    const primYs    = primary.pts.map(p => p.y);
-    const primXs    = primary.pts.map(p => p.x);
-    const pixH      = Math.max(...primYs) - Math.min(...primYs);
+    const primary = selected[0];
+    const primYs  = primary.pts.map(p => p.y);
+    const primXs  = primary.pts.map(p => p.x);
+    const pixH    = Math.max(...primYs) - Math.min(...primYs);
 
     if (pixH < 1) {
-      mats.forEach(m => { try { m.delete(); } catch (_) {} });
+      cleanup();
       self.postMessage({ type: 'ERROR', message: 'Detected shape is too small.' } as CVWorkerError);
       return;
     }
@@ -194,7 +227,7 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       };
     });
 
-    mats.forEach(m => { try { m.delete(); } catch (_) {} });
+    cleanup();
 
     const result: ContourResult = {
       loops:         finalLoops,
@@ -207,7 +240,11 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
 
     self.postMessage({ type: 'CONTOUR_RESULT', result } as CVWorkerResult);
   } catch (err: any) {
-    mats.forEach(m => { try { m.delete(); } catch (_) {} });
-    self.postMessage({ type: 'ERROR', message: err.message ?? String(err) } as CVWorkerError);
+    console.error('[cv.worker] error:', err);
+    cleanup();
+    self.postMessage({
+      type: 'ERROR',
+      message: err?.message ?? String(err),
+    } as CVWorkerError);
   }
 };
