@@ -20,7 +20,8 @@ export interface AppSettings {
   shapePerfection: number;  // 0.0 (organic/curved) to 1.0 (geometric/straight)
   cutterProfile: CutterProfile;
   ribSettings: RibSettings;
-  threshold: number | 'auto'; // 'auto' = multi-threshold scan; number = fixed threshold
+  threshold: number | 'auto'; // 'auto' = multi-threshold scan; number = fixed (10–250)
+  expectedLoops: number;      // how many shapes to return (1–5); 0 = return all found
 }
 
 export interface LoopResult {
@@ -51,6 +52,7 @@ export interface CVWorkerMessage {
     shapePerfection: number;
     targetHeightMm: number;
     threshold: number | 'auto';
+    expectedLoops: number;
   };
 }
 

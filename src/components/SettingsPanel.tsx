@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { useGeometryStore } from '../store/useGeometryStore';
 import { ImageUpload } from './ImageUpload';
@@ -8,14 +8,6 @@ import { generateAllCutterGeometries } from '../utils/geometry';
 import { exportAllSTLs, buildExportFilename } from '../utils/exporter';
 import { fileToImageData } from '../utils/cv-helpers';
 import type { CVWorkerResult, CVWorkerError } from '../types';
-
-const DARKNESS_MAP = { light: 180, medium: 128, dark: 70 } as const;
-const DARKNESS_LABELS = {
-  light: 'Light grey / white background',
-  medium: 'Standard paper',
-  dark: 'Coloured / warm background',
-} as const;
-type DarknessTier = keyof typeof DARKNESS_MAP;
 
 const labelStyle: React.CSSProperties = {
   display: 'flex',
@@ -76,10 +68,9 @@ export function SettingsPanel() {
 
   const workerRef = useRef<Worker | null>(null);
 
-  // Threshold UX local state
-  const [thresholdAuto, setThresholdAuto] = useState(true);
-  const [darknessTier, setDarknessTier] = useState<DarknessTier>('light');
-  const [fineTune, setFineTune] = useState(0);
+  // Derived threshold state — no local state needed
+  const thresholdAuto = settings.threshold === 'auto';
+  const thresholdValue = typeof settings.threshold === 'number' ? settings.threshold : 128;
 
   const handleDetect = useCallback(async () => {
     if (!imageFile) return;
@@ -117,7 +108,8 @@ export function SettingsPanel() {
         type: 'PROCESS_IMAGE',
         imageData,
         settings: {
-          threshold: thresholdAuto ? 'auto' : settings.threshold,
+          threshold: settings.threshold,
+          expectedLoops: settings.expectedLoops,
           smoothing: settings.smoothing,
           shapePerfection: settings.shapePerfection,
           targetHeightMm: settings.targetHeightMm,
@@ -126,7 +118,7 @@ export function SettingsPanel() {
     } catch (err: any) {
       setProcessingState('error', err.message ?? 'Failed to process image.');
     }
-  }, [imageFile, settings, thresholdAuto, setContourResult, setProcessingState]);
+  }, [imageFile, settings, setContourResult, setProcessingState]);
 
   const handleGenerate = useCallback(() => {
     if (!contourResult) return;
@@ -201,92 +193,57 @@ export function SettingsPanel() {
           <ImageUpload />
         </div>
 
-        {/* Line darkness preset */}
+        {/* Threshold */}
         <div style={{ marginBottom: '12px' }}>
           <div style={labelStyle}>
-            <span>Line darkness</span>
-            <span style={valueStyle}>{DARKNESS_LABELS[darknessTier]}</span>
+            <span>Threshold</span>
+            <span style={valueStyle}>{thresholdAuto ? 'Auto' : thresholdValue}</span>
           </div>
-
-          {/* Three-button toggle */}
-          <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
-            {(['light', 'medium', 'dark'] as const).map(tier => (
-              <button
-                key={tier}
-                onClick={() => {
-                  setDarknessTier(tier);
-                  setThresholdAuto(false);
-                  updateSettings({ threshold: DARKNESS_MAP[tier] + fineTune });
-                }}
-                style={{
-                  flex: 1,
-                  padding: '5px 0',
-                  borderRadius: '4px',
-                  border: `1px solid ${darknessTier === tier && !thresholdAuto ? '#7EC845' : '#2a2a2a'}`,
-                  background: darknessTier === tier && !thresholdAuto ? '#1a2a10' : 'transparent',
-                  color: darknessTier === tier && !thresholdAuto ? '#7EC845' : '#888888',
-                  cursor: 'pointer',
-                  fontSize: '11px',
-                  fontFamily: 'Inter, sans-serif',
-                  textTransform: 'capitalize',
-                }}
-              >
-                {tier}
-              </button>
-            ))}
-          </div>
-
-          {/* Auto toggle */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-            <button
-              onClick={() => {
-                const newAuto = !thresholdAuto;
-                setThresholdAuto(newAuto);
-                updateSettings({ threshold: newAuto ? 'auto' : DARKNESS_MAP[darknessTier] + fineTune });
-              }}
-              style={{
-                padding: '3px 10px',
-                borderRadius: '4px',
-                border: `1px solid ${thresholdAuto ? '#7EC845' : '#2a2a2a'}`,
-                background: thresholdAuto ? '#1a2a10' : 'transparent',
-                color: thresholdAuto ? '#7EC845' : '#888888',
-                cursor: 'pointer',
-                fontSize: '10px',
-                fontFamily: 'monospace',
-              }}
-            >
-              Auto detect
-            </button>
-            <span style={{ color: '#555', fontSize: '10px' }}>
-              {thresholdAuto ? '— tries multiple settings automatically' : '— use sliders above'}
-            </span>
-          </div>
-
-          {/* Fine-tune: only shown when not auto */}
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={thresholdAuto}
+              onChange={(e) => updateSettings({ threshold: e.target.checked ? 'auto' : thresholdValue })}
+              style={{ accentColor: '#22C59A', width: '13px', height: '13px' }}
+            />
+            <span style={{ color: '#7A9BB8', fontSize: '11px' }}>Auto detect</span>
+          </label>
           {!thresholdAuto && (
-            <div>
-              <div style={{ ...labelStyle, marginTop: '4px' }}>
-                <span style={{ color: '#666', fontSize: '11px' }}>Fine-tune</span>
-                <span style={valueStyle}>
-                  {fineTune > 0 ? `+${fineTune}` : fineTune}
-                  {' '}(darker ← → lighter)
-                </span>
-              </div>
+            <>
               <input
                 type="range"
-                min={-30}
-                max={30}
+                min={10}
+                max={250}
                 step={5}
-                value={fineTune}
-                onChange={(e) => {
-                  const ft = parseInt(e.target.value);
-                  setFineTune(ft);
-                  updateSettings({ threshold: DARKNESS_MAP[darknessTier] + ft });
-                }}
+                value={thresholdValue}
+                onChange={(e) => updateSettings({ threshold: parseInt(e.target.value) })}
                 style={sliderStyle}
               />
-            </div>
+              <div style={{ color: '#555', fontSize: '10px', fontFamily: 'monospace', marginTop: '2px' }}>
+                10 = detect faint lines &nbsp;←→&nbsp; 250 = detect bold dark lines only
+              </div>
+            </>
           )}
+        </div>
+
+        {/* Expected shapes */}
+        <div style={{ marginBottom: '10px' }}>
+          <div style={labelStyle}>
+            <span>Expected shapes</span>
+            <span style={valueStyle}>{settings.expectedLoops}</span>
+          </div>
+          <input
+            type="range"
+            min={1}
+            max={5}
+            step={1}
+            value={settings.expectedLoops}
+            onChange={(e) => updateSettings({ expectedLoops: parseInt(e.target.value) })}
+            style={sliderStyle}
+          />
+          <div style={{ color: '#555', fontSize: '10px', fontFamily: 'monospace', marginTop: '2px' }}>
+            1 = outer only · 2 = outer + inner (avocado pit, letter A hole) · etc.
+          </div>
         </div>
 
         {/* Target shape height */}
@@ -395,7 +352,6 @@ export function SettingsPanel() {
       <div style={sectionStyle}>
         <div style={sectionTitle}>3 · Reinforcement Ribs</div>
 
-        {/* Enable toggle */}
         <div style={{ marginBottom: '12px' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
             <input
@@ -410,7 +366,6 @@ export function SettingsPanel() {
           </label>
         </div>
 
-        {/* Grid spacing */}
         <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
           <div style={labelStyle}>
             <span>Rib spacing</span>
@@ -422,7 +377,6 @@ export function SettingsPanel() {
             style={sliderStyle} />
         </div>
 
-        {/* Grid angle */}
         <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
           <div style={labelStyle}>
             <span>Rib angle</span>
@@ -437,7 +391,6 @@ export function SettingsPanel() {
           </div>
         </div>
 
-        {/* Rib height */}
         <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
           <div style={labelStyle}>
             <span>Rib height</span>
@@ -449,7 +402,6 @@ export function SettingsPanel() {
             style={sliderStyle} />
         </div>
 
-        {/* Rib width */}
         <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
           <div style={labelStyle}>
             <span>Rib width</span>
@@ -461,7 +413,6 @@ export function SettingsPanel() {
             style={sliderStyle} />
         </div>
 
-        {/* Grid centre offset */}
         <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
           <div style={labelStyle}>
             <span>Grid centre X</span>
