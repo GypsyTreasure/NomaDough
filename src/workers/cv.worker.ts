@@ -3,385 +3,211 @@ import type { CVWorkerMessage, CVWorkerResult, CVWorkerError, ContourResult } fr
 declare function importScripts(...urls: string[]): void;
 declare const cv: any;
 
-let resolveCV!: () => void;
-const cvReady = new Promise<void>((resolve) => { resolveCV = resolve; });
-
-(self as any).Module = {
-  onRuntimeInitialized() { resolveCV(); },
-};
+const cvReady = new Promise<void>((resolve) => {
+  if (typeof cv !== 'undefined' && cv.Mat) { resolve(); return; }
+  (self as any).Module = { onRuntimeInitialized: () => resolve() };
+});
 
 importScripts('https://docs.opencv.org/4.8.0/opencv.js');
 
-function cornerPreservingSmooth(
-  points: Array<{x: number, y: number}>,
-  shapePerfection: number
-): Array<{x: number, y: number}> {
-  if (points.length < 4) return points;
-
-  const cornerThresholdDeg = 120 - shapePerfection * 100;
-  const cornerThresholdRad = (cornerThresholdDeg * Math.PI) / 180;
-
-  function angle(p0: {x:number,y:number}, p1: {x:number,y:number}, p2: {x:number,y:number}): number {
-    const ax = p0.x - p1.x, ay = p0.y - p1.y;
-    const bx = p2.x - p1.x, by = p2.y - p1.y;
-    const dot = ax*bx + ay*by;
-    const magA = Math.hypot(ax, ay), magB = Math.hypot(bx, by);
-    if (magA === 0 || magB === 0) return 0;
-    return Math.acos(Math.max(-1, Math.min(1, dot / (magA * magB))));
-  }
-
-  const n = points.length;
-  const isCorner = new Array(n).fill(false);
-  for (let i = 0; i < n; i++) {
-    const prev = points[(i - 1 + n) % n];
-    const curr = points[i];
-    const next = points[(i + 1) % n];
-    const bendAngle = Math.PI - angle(prev, curr, next);
-    if (bendAngle > cornerThresholdRad) isCorner[i] = true;
-  }
-
-  let pts = [...points];
-  for (let iter = 0; iter < 2; iter++) {
-    const newPts: typeof pts = [];
-    const n2 = pts.length;
-    for (let i = 0; i < n2; i++) {
-      const j = (i + 1) % n2;
-      if (isCorner[i % isCorner.length] || isCorner[j % isCorner.length]) {
-        newPts.push(pts[i]);
-      } else {
-        newPts.push({ x: 0.75*pts[i].x + 0.25*pts[j].x, y: 0.75*pts[i].y + 0.25*pts[j].y });
-        newPts.push({ x: 0.25*pts[i].x + 0.75*pts[j].x, y: 0.25*pts[i].y + 0.75*pts[j].y });
-      }
+function chaikin(pts: {x:number;y:number}[], iters: number): {x:number;y:number}[] {
+  for (let k = 0; k < iters; k++) {
+    const out: typeof pts = [];
+    const n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      out.push({ x: 0.75*a.x + 0.25*b.x, y: 0.75*a.y + 0.25*b.y });
+      out.push({ x: 0.25*a.x + 0.75*b.x, y: 0.25*a.y + 0.75*b.y });
     }
-    pts = newPts;
+    pts = out;
   }
-
-  if (shapePerfection > 0.5) {
-    const snapStrength = (shapePerfection - 0.5) * 2;
-    pts = pts.map((p, i) => {
-      if (!isCorner[i % isCorner.length]) return p;
-      const prev = pts[(i - 1 + pts.length) % pts.length];
-      const next = pts[(i + 1) % pts.length];
-      const ax = p.x - prev.x, ay = p.y - prev.y;
-      const bx = next.x - p.x, by = next.y - p.y;
-      const angleDeg = Math.abs(Math.atan2(ay, ax) - Math.atan2(by, bx)) * 180 / Math.PI;
-      if (Math.abs(angleDeg - 90) < 20 || Math.abs(angleDeg - 270) < 20) {
-        const len = Math.hypot(ax, ay);
-        const snappedX = prev.x + Math.round(ax / len) * len;
-        const snappedY = prev.y + Math.round(ay / len) * len;
-        return {
-          x: p.x + (snappedX - p.x) * snapStrength,
-          y: p.y + (snappedY - p.y) * snapStrength,
-        };
-      }
-      return p;
-    });
-  }
-
   return pts;
 }
 
 self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
   if (e.data.type !== 'PROCESS_IMAGE') return;
   const { imageData, settings } = e.data;
+  const W = imageData.width, H = imageData.height;
+  const imageArea = W * H;
+  const mats: any[] = [];
+  const M = (mat: any) => { mats.push(mat); return mat; };
 
   try {
     await cvReady;
-    const _cv = (self as any).cv;
 
-    // ── Step 1: Preprocessing ──────────────────────────────────────────────
-    // No CLAHE — it amplifies paper texture into fake ink contours.
-    // normalize + large blur is enough to handle grey backgrounds.
-    const src = _cv.matFromImageData(imageData);
-    const gray = new _cv.Mat();
-    _cv.cvtColor(src, gray, _cv.COLOR_RGBA2GRAY);
-    _cv.normalize(gray, gray, 0, 255, _cv.NORM_MINMAX);
-
-    const blurred = new _cv.Mat();
-    _cv.GaussianBlur(gray, blurred, new _cv.Size(9, 9), 0);
-
-    // Minimum contour area: 0.2% of image, at least 1000 px²
-    const imageArea = imageData.width * imageData.height;
-    const minArea = Math.max(1000, imageArea * 0.002);
-
-    // ── Helper: threshold → morph close (3×3, 1 iter) → RETR_CCOMP ────────
-    function detectContoursAtThreshold(thresh: number): { contours: any; hierarchy: any } {
-      const binary = new _cv.Mat();
-      _cv.threshold(blurred, binary, thresh, 255, _cv.THRESH_BINARY_INV);
-
-      const kernel = _cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(3, 3));
-      const closed = new _cv.Mat();
-      _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, kernel, new _cv.Point(-1, -1), 1);
-      kernel.delete();
-      binary.delete();
-
-      const contours = new _cv.MatVector();
-      const hierarchy = new _cv.Mat();
-      _cv.findContours(closed, contours, hierarchy, _cv.RETR_CCOMP, _cv.CHAIN_APPROX_TC89_KCOS);
-      closed.delete();
-
-      return { contours, hierarchy };
-    }
-
-    // ── Score a contour set: prefer large + compact + non-frame ───────────
-    function scoreContours(contours: any, imgW: number, imgH: number): number {
-      let score = 0;
-      let validCount = 0;
-
-      for (let i = 0; i < contours.size(); i++) {
-        const contour = contours.get(i);
-        const area = _cv.contourArea(contour);
-        if (area < minArea) continue;
-
-        const rect = _cv.boundingRect(contour);
-        const bboxArea = rect.width * rect.height;
-        if (bboxArea > imageArea * 0.85) continue;
-        if (rect.x <= 2 && rect.y <= 2 &&
-            rect.x + rect.width >= imgW - 2 &&
-            rect.y + rect.height >= imgH - 2) continue;
-
-        const perimeter = _cv.arcLength(contour, true);
-        const compactness = perimeter > 0 ? (4 * Math.PI * area) / (perimeter * perimeter) : 0;
-
-        // Square the compactness to penalise jagged/noisy outlines more aggressively
-        score += area * Math.max(compactness * compactness, 0.001);
-        validCount++;
-      }
-
-      return validCount > 0 ? score : 0;
-    }
-
-    // ── Step 2: Determine best threshold ──────────────────────────────────
-    let bestThreshold = 128;
+    const src    = M(cv.matFromImageData(imageData));
+    const gray   = M(new cv.Mat());
+    cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+    const blurred = M(new cv.Mat());
+    cv.GaussianBlur(gray, blurred, new cv.Size(5, 5), 0);
+    const binary = M(new cv.Mat());
 
     if (settings.threshold === 'auto') {
-      const tempBin = new _cv.Mat();
-      const otsuRaw = _cv.threshold(blurred, tempBin, 0, 255, _cv.THRESH_BINARY_INV | _cv.THRESH_OTSU);
-      tempBin.delete();
-      const otsuVal = (typeof otsuRaw === 'number' && isFinite(otsuRaw)) ? Math.round(otsuRaw) : 128;
-
-      const candidates = [
-        otsuVal, otsuVal - 20, otsuVal - 40, otsuVal - 60, otsuVal + 10,
-        200, 180, 160, 140, 128, 110, 90, 70, 50, 35,
-      ].filter(t => t >= 15 && t <= 245)
-       .filter((v, i, a) => a.indexOf(v) === i);
-
-      let bestScore = -1;
-      for (const thresh of candidates) {
-        const { contours, hierarchy } = detectContoursAtThreshold(thresh);
-        const s = scoreContours(contours, imageData.width, imageData.height);
-        if (s > bestScore) {
-          bestScore = s;
-          bestThreshold = thresh;
-        }
-        contours.delete();
-        hierarchy.delete();
-      }
+      const shortDim = Math.min(W, H);
+      let blockSize = Math.max(11, Math.round(shortDim / 20));
+      if (blockSize % 2 === 0) blockSize += 1;
+      cv.adaptiveThreshold(blurred, binary, 255,
+        cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY_INV, blockSize, 8);
     } else {
-      bestThreshold = settings.threshold as number;
+      cv.threshold(blurred, binary, settings.threshold as number, 255, cv.THRESH_BINARY_INV);
     }
 
-    // ── Step 3: Final detection ────────────────────────────────────────────
-    const { contours, hierarchy } = detectContoursAtThreshold(bestThreshold);
+    const k3     = M(cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(3, 3)));
+    const closed = M(new cv.Mat());
+    cv.morphologyEx(binary, closed, cv.MORPH_CLOSE, k3, new cv.Point(-1, -1), 1);
+    const opened = M(new cv.Mat());
+    cv.morphologyEx(closed, opened, cv.MORPH_OPEN, k3, new cv.Point(-1, -1), 1);
 
-    // ── Step 4: Collect valid loops ────────────────────────────────────────
-    interface ValidLoop {
-      pixelPoints: Array<{ x: number; y: number }>;
+    const contours  = M(new cv.MatVector());
+    const hierarchy = M(new cv.Mat());
+    cv.findContours(opened, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_TC89_KCOS);
+
+    const minArea = imageArea * 0.0005;
+    const diag    = Math.hypot(W, H);
+
+    interface RawLoop {
+      pts: Array<{x: number; y: number}>;
       area: number;
-      role: 'outer' | 'inner';
+      cx: number;
+      cy: number;
     }
 
-    const validLoops: ValidLoop[] = [];
+    const raw: RawLoop[] = [];
 
     for (let i = 0; i < contours.size(); i++) {
-      const contour = contours.get(i);
-      const area = _cv.contourArea(contour);
+      const c    = contours.get(i);
+      const area = cv.contourArea(c);
       if (area < minArea) continue;
 
-      const rect = _cv.boundingRect(contour);
-      const bboxArea = rect.width * rect.height;
-      if (bboxArea > imageArea * 0.85) continue;
+      const rect = cv.boundingRect(c);
       if (rect.x <= 2 && rect.y <= 2 &&
-          rect.x + rect.width >= imageData.width - 2 &&
-          rect.y + rect.height >= imageData.height - 2) continue;
+          rect.x + rect.width  >= W - 2 &&
+          rect.y + rect.height >= H - 2) continue;
+      if (rect.width * rect.height > imageArea * 0.92) continue;
 
-      const parent = hierarchy.data32S[i * 4 + 3];
-      const role: 'outer' | 'inner' = parent === -1 ? 'outer' : 'inner';
+      const perimeter = cv.arcLength(c, true);
+      // Roughness filter: roughness > 4 means too jagged, skip
+      const roughness = perimeter / (2 * Math.sqrt(Math.PI * area));
+      if (roughness > 4.0) continue;
 
-      // Relative epsilon: scales with perimeter so large contours don't get over-detailed
-      const perimeter = _cv.arcLength(contour, true);
-      const epsilon = Math.max(4.0, perimeter * 0.003);
+      const epsilon = Math.max(1.5, Math.min(0.005 * perimeter, 8.0));
+      const approx  = new cv.Mat();
+      cv.approxPolyDP(c, approx, epsilon, true);
 
-      const simplified = new _cv.Mat();
-      _cv.approxPolyDP(contour, simplified, epsilon, true);
-
-      const pts: Array<{ x: number; y: number }> = [];
-      for (let j = 0; j < simplified.rows; j++) {
-        pts.push({ x: simplified.data32S[j * 2], y: simplified.data32S[j * 2 + 1] });
+      const pts: Array<{x: number; y: number}> = [];
+      for (let j = 0; j < approx.rows; j++) {
+        pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
       }
-      simplified.delete();
+      approx.delete();
 
-      if (pts.length >= 4) {
-        validLoops.push({ pixelPoints: pts, area, role });
-      }
+      if (pts.length < 4) continue;
+
+      const xs = pts.map(p => p.x);
+      const ys = pts.map(p => p.y);
+      raw.push({
+        pts,
+        area,
+        cx: (Math.min(...xs) + Math.max(...xs)) / 2,
+        cy: (Math.min(...ys) + Math.max(...ys)) / 2,
+      });
     }
 
-    contours.delete();
-    hierarchy.delete();
-
-    if (validLoops.length === 0) {
-      throw new Error(
-        'No shape detected. Make sure the drawing has a clear closed outline on a lighter background. ' +
-        'Try lowering the threshold slider.'
-      );
-    }
-
-    // Sort: outer by area desc first, then inner by area desc
-    validLoops.sort((a, b) => {
-      if (a.role !== b.role) return a.role === 'outer' ? -1 : 1;
-      return b.area - a.area;
-    });
-
-    // ── Step 5: Proximity filter — remove same-role loops mostly inside others
-    function getLoopBbox(pts: Array<{x:number,y:number}>) {
-      const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
-      return {
-        x: Math.min(...xs), y: Math.min(...ys),
-        w: Math.max(...xs) - Math.min(...xs),
-        h: Math.max(...ys) - Math.min(...ys),
-      };
-    }
-
-    function bboxOverlapFraction(
-      a: {x:number,y:number,w:number,h:number},
-      b: {x:number,y:number,w:number,h:number}
-    ): number {
-      const ix = Math.max(0, Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x));
-      const iy = Math.max(0, Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y));
-      const iArea = ix * iy;
-      const smallerArea = Math.min(a.w * a.h, b.w * b.h);
-      return smallerArea > 0 ? iArea / smallerArea : 0;
-    }
-
-    const proximityFiltered: ValidLoop[] = [];
-    for (const loop of validLoops) {
-      const bbox = getLoopBbox(loop.pixelPoints);
-      let dominated = false;
-      for (const kept of proximityFiltered) {
-        if (kept.role !== loop.role) continue; // allow inner to overlap with outer
-        const kbbox = getLoopBbox(kept.pixelPoints);
-        // If this loop's bbox is >65% inside an already-kept same-role loop, skip it
-        if (bboxOverlapFraction(bbox, kbbox) > 0.65) {
-          dominated = true;
+    // Concentric dedup: same ink ring has two edges; keep the larger
+    const afterConcentric: RawLoop[] = [];
+    for (const loop of raw) {
+      let absorbed = false;
+      for (let k = 0; k < afterConcentric.length; k++) {
+        const kept = afterConcentric[k];
+        if (Math.hypot(loop.cx - kept.cx, loop.cy - kept.cy) < diag * 0.15) {
+          if (loop.area > kept.area) afterConcentric[k] = loop;
+          absorbed = true;
           break;
         }
       }
-      if (!dominated) proximityFiltered.push(loop);
+      if (!absorbed) afterConcentric.push(loop);
     }
 
-    // ── Step 6: Select exactly expectedLoops loops ────────────────────────
-    function selectLoops(loops: ValidLoop[], n: number): ValidLoop[] {
-      if (n <= 0) return loops; // 0 = return all
-
-      const outers = loops.filter(l => l.role === 'outer');
-      const inners = loops.filter(l => l.role === 'inner');
-
-      const selected: ValidLoop[] = [];
-
-      // Primary outer first
-      if (outers.length > 0) selected.push(outers[0]);
-
-      // Fill remaining slots with inner loops first
-      for (let i = 0; selected.length < n && i < inners.length; i++) {
-        selected.push(inners[i]);
-      }
-
-      // If still short, add additional outer loops
-      for (let i = 1; selected.length < n && i < outers.length; i++) {
-        selected.push(outers[i]);
-      }
-
-      return selected;
+    // Proximity dedup: nearly-overlapping smaller sibling → remove
+    function getBbox(pts: Array<{x:number;y:number}>) {
+      const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+      return { x1: Math.min(...xs), y1: Math.min(...ys), x2: Math.max(...xs), y2: Math.max(...ys) };
     }
 
-    const finalLoops = selectLoops(proximityFiltered, settings.expectedLoops);
+    afterConcentric.sort((a, b) => b.area - a.area);
 
-    if (finalLoops.length === 0) {
-      throw new Error('No valid shape detected. Try adjusting the threshold or re-photograph with better contrast.');
-    }
-
-    // ── Step 7: Smooth + scale each loop to mm ─────────────────────────────
-    const primaryPts = finalLoops[0].pixelPoints;
-    const ys = primaryPts.map(p => p.y);
-    const xs = primaryPts.map(p => p.x);
-    const pixelHeight = Math.max(...ys) - Math.min(...ys);
-
-    if (pixelHeight < 1) {
-      throw new Error('Detected shape is too small.');
-    }
-
-    const scaleFactor = settings.targetHeightMm / pixelHeight;
-    const cx_px = (Math.max(...xs) + Math.min(...xs)) / 2;
-    const cy_px = (Math.max(...ys) + Math.min(...ys)) / 2;
-
-    function applySmoothing(rawPts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
-      let pts = [...rawPts];
-
-      for (let iter = 0; iter < settings.smoothing; iter++) {
-        const smoothed: typeof pts = [];
-        const n = pts.length;
-        for (let i = 0; i < n; i++) {
-          const p0 = pts[i];
-          const p1 = pts[(i + 1) % n];
-          smoothed.push({ x: 0.75 * p0.x + 0.25 * p1.x, y: 0.75 * p0.y + 0.25 * p1.y });
-          smoothed.push({ x: 0.25 * p0.x + 0.75 * p1.x, y: 0.25 * p0.y + 0.75 * p1.y });
+    const afterProximity: RawLoop[] = [];
+    for (const loop of afterConcentric) {
+      const bA = getBbox(loop.pts);
+      let redundant = false;
+      for (const kept of afterProximity) {
+        const bB = getBbox(kept.pts);
+        const gap = Math.max(0,
+          Math.max(bA.x1, bB.x1) - Math.min(bA.x2, bB.x2),
+          Math.max(bA.y1, bB.y1) - Math.min(bA.y2, bB.y2)
+        );
+        if (gap < 15 && loop.area < kept.area * 0.5) {
+          redundant = true;
+          break;
         }
-        pts = smoothed;
       }
-
-      if (settings.shapePerfection > 0) {
-        pts = cornerPreservingSmooth(pts, settings.shapePerfection);
-      }
-
-      return pts;
+      if (!redundant) afterProximity.push(loop);
     }
 
-    function scaleToMm(pts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
-      return pts.map(p => ({
-        x: (p.x - cx_px) * scaleFactor,
-        y: (p.y - cy_px) * scaleFactor,
+    if (afterProximity.length === 0) {
+      mats.forEach(m => { try { m.delete(); } catch (_) {} });
+      self.postMessage({ type: 'ERROR', message: 'No shape detected. Ensure a clear outline on a lighter background.' } as CVWorkerError);
+      return;
+    }
+
+    // Select up to expectedLoops (0 = all)
+    const take = settings.expectedLoops <= 0
+      ? afterProximity.length
+      : Math.min(settings.expectedLoops, afterProximity.length);
+    const selected = afterProximity.slice(0, take);
+
+    // Scale using primary loop's pixel bounding box
+    const primary   = selected[0];
+    const primYs    = primary.pts.map(p => p.y);
+    const primXs    = primary.pts.map(p => p.x);
+    const pixH      = Math.max(...primYs) - Math.min(...primYs);
+
+    if (pixH < 1) {
+      mats.forEach(m => { try { m.delete(); } catch (_) {} });
+      self.postMessage({ type: 'ERROR', message: 'Detected shape is too small.' } as CVWorkerError);
+      return;
+    }
+
+    const scale = settings.targetHeightMm / pixH;
+    const cx_px = (Math.min(...primXs) + Math.max(...primXs)) / 2;
+    const cy_px = (Math.min(...primYs) + Math.max(...primYs)) / 2;
+
+    const finalLoops = selected.map((loop, idx) => {
+      const smoothPx = chaikin(loop.pts, settings.smoothing);
+      const mmPts = smoothPx.map(p => ({
+        x: (p.x - cx_px) * scale,
+        y: (p.y - cy_px) * scale,
       }));
-    }
+      return {
+        points:      mmPts,
+        pixelPoints: smoothPx,
+        role:        (idx === 0 ? 'outer' : 'inner') as 'outer' | 'inner',
+      };
+    });
 
-    const loops: Array<{ points: any[]; pixelPoints: any[]; role: 'outer' | 'inner' }> =
-      finalLoops.map(loop => {
-        const smoothedPts = applySmoothing(loop.pixelPoints);
-        return {
-          pixelPoints: smoothedPts,
-          points: scaleToMm(smoothedPts),
-          role: loop.role,
-        };
-      });
-
-    // Cleanup
-    [src, gray, blurred].forEach(m => { try { m.delete(); } catch (_) {} });
-
-    const innerLoops = loops.filter(l => l.role === 'inner');
+    mats.forEach(m => { try { m.delete(); } catch (_) {} });
 
     const result: ContourResult = {
-      loops,
-      points: loops[0].points,
-      pixelPoints: loops[0].pixelPoints,
-      innerContours: innerLoops.map(l => ({
-        points: l.points,
-        pixelPoints: l.pixelPoints,
-      })),
-      imageWidth: imageData.width,
-      imageHeight: imageData.height,
+      loops:         finalLoops,
+      points:        finalLoops[0].points,
+      pixelPoints:   finalLoops[0].pixelPoints,
+      innerContours: finalLoops.slice(1).map(l => ({ points: l.points, pixelPoints: l.pixelPoints })),
+      imageWidth:    W,
+      imageHeight:   H,
     };
 
     self.postMessage({ type: 'CONTOUR_RESULT', result } as CVWorkerResult);
   } catch (err: any) {
+    mats.forEach(m => { try { m.delete(); } catch (_) {} });
     self.postMessage({ type: 'ERROR', message: err.message ?? String(err) } as CVWorkerError);
   }
 };
