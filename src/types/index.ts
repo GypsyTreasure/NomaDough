@@ -8,8 +8,10 @@ export interface RibSettings {
   enabled: boolean;
   spacing: number;    // mm between ribs, default 15, range 5–50
   angle: number;      // degrees, default 0 (horizontal), range 0–90
-  ribHeight: number;  // fixed 3mm — read-only display
-  ribWidth: number;   // mirrors profile B — read-only display
+  ribHeight: number;  // mm, default 3, range 1–10 — user editable
+  ribWidth: number;   // mm, default 3, range 0.5–5 — user editable
+  offsetX: number;    // mm, grid centre X offset from bbox centre, range -50–50
+  offsetY: number;    // mm, grid centre Y offset from bbox centre, range -50–50
 }
 
 export interface AppSettings {

@@ -457,12 +457,9 @@ export function SettingsPanel() {
             <span>Rib spacing</span>
             <span style={valueStyle}>{ribSettings.spacing} mm</span>
           </div>
-          <input
-            type="range" min={5} max={50} step={1}
-            value={ribSettings.spacing}
-            disabled={ribsDisabled}
-            onChange={(e) => updateRibSettings({ spacing: parseInt(e.target.value) })}
-          />
+          <input type="range" min={5} max={50} step={1}
+            value={ribSettings.spacing} disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ spacing: parseInt(e.target.value) })} />
         </div>
 
         {/* Grid angle */}
@@ -471,24 +468,57 @@ export function SettingsPanel() {
             <span>Rib angle</span>
             <span style={valueStyle}>{ribSettings.angle}°</span>
           </div>
-          <input
-            type="range" min={0} max={90} step={5}
-            value={ribSettings.angle}
-            disabled={ribsDisabled}
-            onChange={(e) => updateRibSettings({ angle: parseInt(e.target.value) })}
-          />
+          <input type="range" min={0} max={90} step={5}
+            value={ribSettings.angle} disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ angle: parseInt(e.target.value) })} />
           <div style={{ color: '#1A3558', fontSize: '10px', fontFamily: 'monospace', marginTop: '2px' }}>
             0° = parallel · 45° = diagonal · 90° = perpendicular
           </div>
         </div>
 
-        {/* Read-only info */}
-        <div style={{ opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
-          <div style={{ color: '#7A9BB8', fontSize: '11px', fontFamily: 'monospace', marginBottom: '2px' }}>
-            Rib height: <span style={{ color: '#F0F0F0' }}>3 mm</span> (fixed)
+        {/* Rib height */}
+        <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={labelStyle}>
+            <span>Rib height</span>
+            <span style={valueStyle}>{ribSettings.ribHeight.toFixed(1)} mm</span>
           </div>
-          <div style={{ color: '#7A9BB8', fontSize: '11px', fontFamily: 'monospace' }}>
-            Rib width: <span style={{ color: '#F0F0F0' }}>{ribSettings.ribWidth.toFixed(1)} mm</span> (matches base width)
+          <input type="range" min={1} max={10} step={0.5}
+            value={ribSettings.ribHeight} disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ ribHeight: parseFloat(e.target.value) })} />
+        </div>
+
+        {/* Rib width */}
+        <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={labelStyle}>
+            <span>Rib width</span>
+            <span style={valueStyle}>{ribSettings.ribWidth.toFixed(1)} mm</span>
+          </div>
+          <input type="range" min={0.5} max={5} step={0.1}
+            value={ribSettings.ribWidth} disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ ribWidth: parseFloat(e.target.value) })} />
+        </div>
+
+        {/* Grid centre offset */}
+        <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={labelStyle}>
+            <span>Grid centre X</span>
+            <span style={valueStyle}>{ribSettings.offsetX > 0 ? '+' : ''}{ribSettings.offsetX} mm</span>
+          </div>
+          <input type="range" min={-50} max={50} step={1}
+            value={ribSettings.offsetX} disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ offsetX: parseInt(e.target.value) })} />
+        </div>
+
+        <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
+          <div style={labelStyle}>
+            <span>Grid centre Y</span>
+            <span style={valueStyle}>{ribSettings.offsetY > 0 ? '+' : ''}{ribSettings.offsetY} mm</span>
+          </div>
+          <input type="range" min={-50} max={50} step={1}
+            value={ribSettings.offsetY} disabled={ribsDisabled}
+            onChange={(e) => updateRibSettings({ offsetY: parseInt(e.target.value) })} />
+          <div style={{ color: '#1A3558', fontSize: '10px', fontFamily: 'monospace', marginTop: '2px' }}>
+            Grid starts at bbox centre + offset. Rib ends always land on wall.
           </div>
         </div>
       </div>

@@ -12,6 +12,8 @@ const defaultSettings: AppSettings = {
     angle: 0,
     ribHeight: 3,
     ribWidth: 3.0,
+    offsetX: 0,
+    offsetY: 0,
   },
   detectionMode: 'auto',
   loopThresholds: [128],
@@ -42,20 +44,14 @@ export const useAppStore = create<AppStore>((set, get) => ({
   processingError: null,
   contourResult: null,
 
+  // ribWidth no longer auto-syncs with profile.b — it is independent
   updateProfile: (patch) =>
-    set((state) => {
-      const newProfile = { ...state.settings.cutterProfile, ...patch };
-      return {
-        settings: {
-          ...state.settings,
-          cutterProfile: newProfile,
-          ribSettings: {
-            ...state.settings.ribSettings,
-            ribWidth: newProfile.b,
-          },
-        },
-      };
-    }),
+    set((state) => ({
+      settings: {
+        ...state.settings,
+        cutterProfile: { ...state.settings.cutterProfile, ...patch },
+      },
+    })),
 
   updateSettings: (patch) =>
     set((state) => ({

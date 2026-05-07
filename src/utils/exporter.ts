@@ -1,20 +1,11 @@
 import * as THREE from 'three';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
+import { manualMergeGeometries } from './geometry';
 
-// Build a scene-graph group from one cutter geometry + its rib geometries so
-// STLExporter traverses all children and writes them into a single binary STL.
-function buildGroup(cutterGeo: THREE.BufferGeometry, ribGeos: THREE.BufferGeometry[]): THREE.Group {
-  const group = new THREE.Group();
-  group.add(new THREE.Mesh(cutterGeo));
-  for (const rib of ribGeos) {
-    group.add(new THREE.Mesh(rib));
-  }
-  return group;
-}
-
-function groupToBlob(group: THREE.Group): Blob {
+function geometryToBlob(geometry: THREE.BufferGeometry): Blob {
   const exporter = new STLExporter();
-  const stlData = exporter.parse(group, { binary: true });
+  const mesh = new THREE.Mesh(geometry);
+  const stlData = exporter.parse(mesh, { binary: true });
   const blobPart = stlData instanceof DataView ? stlData.buffer as ArrayBuffer : stlData as string;
   return new Blob([blobPart], { type: 'application/octet-stream' });
 }
@@ -37,19 +28,22 @@ export function exportAllSTLs(
   if (geometries.length === 0) return new Blob([], { type: 'application/octet-stream' });
 
   if (geometries.length === 1) {
-    // Single loop — one STL with cutter + all ribs
-    const group = buildGroup(geometries[0], ribGeometries);
-    const blob = groupToBlob(group);
+    // Single loop → merge cutter + all ribs into one body
+    const allGeos = ribGeometries.length > 0
+      ? [geometries[0], ...ribGeometries]
+      : [geometries[0]];
+    const blob = geometryToBlob(manualMergeGeometries(allGeos));
     triggerDownload(blob, buildExportFilename(imageFile));
     return blob;
   }
 
-  // Multiple loops — one STL per loop; ribs are distributed to the first loop
-  // (ribs span the whole bounding box so they logically belong to the main contour)
+  // Multiple loops → one file per loop; all ribs go with loop 0
   const base = imageFile ? imageFile.name.replace(/\.[^.]+$/, '') : 'shape';
   const blobs: Blob[] = geometries.map((geo, i) => {
-    const ribs = i === 0 ? ribGeometries : [];
-    return groupToBlob(buildGroup(geo, ribs));
+    const loopGeos = i === 0 && ribGeometries.length > 0
+      ? [geo, ...ribGeometries]
+      : [geo];
+    return geometryToBlob(manualMergeGeometries(loopGeos));
   });
 
   blobs.forEach((blob, i) => {

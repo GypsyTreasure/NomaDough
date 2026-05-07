@@ -1,16 +1,14 @@
 import * as THREE from 'three';
 import { CutterProfile, ContourResult, RibSettings } from '../types';
 
+// ─── Cutter profile & extrusion ─────────────────────────────────────────────
+
 export function buildProfileShape(profile: CutterProfile): THREE.Shape {
   const { a, b, c } = profile;
   const shape = new THREE.Shape();
-  // For a CatmullRomCurve3 in the XZ plane, Three.js Frenet frames give:
-  //   normals   = (0, -1, 0)  →  shape local X maps to world -Y
-  //   binormals = radial XZ   →  shape local Y maps to wall thickness in XZ
-  // So: base at local x=0 → world Y=0; cutting edge at local x=-c → world Y=c.
-  shape.moveTo(0,  -b / 2);  // base, world Y=0
+  shape.moveTo(0,  -b / 2);
   shape.lineTo(0,   b / 2);
-  shape.lineTo(-c,  a / 2);  // cutting edge, world Y=c
+  shape.lineTo(-c,  a / 2);
   shape.lineTo(-c, -a / 2);
   shape.closePath();
   return shape;
@@ -41,56 +39,7 @@ export function generateCutterGeometry(
   return geometry;
 }
 
-// ─── Cohen-Sutherland line clipping ────────────────────────────────────────
-
-const CS_INSIDE = 0, CS_LEFT = 1, CS_RIGHT = 2, CS_BOTTOM = 4, CS_TOP = 8;
-
-function computeOutcode(x: number, y: number, minX: number, minY: number, maxX: number, maxY: number): number {
-  let code = CS_INSIDE;
-  if (x < minX) code |= CS_LEFT;
-  else if (x > maxX) code |= CS_RIGHT;
-  if (y < minY) code |= CS_BOTTOM;
-  else if (y > maxY) code |= CS_TOP;
-  return code;
-}
-
-function clipLineToBbox(
-  x1: number, y1: number, x2: number, y2: number,
-  minX: number, minY: number, maxX: number, maxY: number
-): { x1: number; y1: number; x2: number; y2: number } | null {
-  let outcode1 = computeOutcode(x1, y1, minX, minY, maxX, maxY);
-  let outcode2 = computeOutcode(x2, y2, minX, minY, maxX, maxY);
-
-  while (true) {
-    if (!(outcode1 | outcode2)) return { x1, y1, x2, y2 };
-    if (outcode1 & outcode2) return null;
-
-    const outcodeOut = outcode1 ? outcode1 : outcode2;
-    let x = 0, y = 0;
-
-    if (outcodeOut & CS_TOP) {
-      x = x1 + (x2 - x1) * (maxY - y1) / (y2 - y1);
-      y = maxY;
-    } else if (outcodeOut & CS_BOTTOM) {
-      x = x1 + (x2 - x1) * (minY - y1) / (y2 - y1);
-      y = minY;
-    } else if (outcodeOut & CS_RIGHT) {
-      y = y1 + (y2 - y1) * (maxX - x1) / (x2 - x1);
-      x = maxX;
-    } else {
-      y = y1 + (y2 - y1) * (minX - x1) / (x2 - x1);
-      x = minX;
-    }
-
-    if (outcodeOut === outcode1) {
-      x1 = x; y1 = y;
-      outcode1 = computeOutcode(x1, y1, minX, minY, maxX, maxY);
-    } else {
-      x2 = x; y2 = y;
-      outcode2 = computeOutcode(x2, y2, minX, minY, maxX, maxY);
-    }
-  }
-}
+// ─── Polygon helpers ─────────────────────────────────────────────────────────
 
 function isPointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean {
   let inside = false;
@@ -105,12 +54,65 @@ function isPointInPolygon(px: number, py: number, polygon: Array<{ x: number; y:
   return inside;
 }
 
-// ─── Rib segment generation (shared between solid geometry and line preview) ─
+// Clip an infinite line (origin + unit direction) to the interior of a polygon.
+// Returns all inside sub-segments, with each endpoint extended by wallPenetration
+// so the rib box physically overlaps the cutter wall.
+function clipLineToPolygon(
+  ox: number, oy: number,
+  dx: number, dy: number,
+  polygon: Array<{ x: number; y: number }>,
+  wallPenetration: number
+): Array<{ x1: number; y1: number; x2: number; y2: number }> {
+  const ts: number[] = [];
+  const n = polygon.length;
+
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const ex = polygon[i].x - polygon[j].x;
+    const ey = polygon[i].y - polygon[j].y;
+    const qx = polygon[j].x - ox;
+    const qy = polygon[j].y - oy;
+
+    // Solve: ox + t*dx = polygon[j].x + s*ex  →  t*dx - s*ex = qx
+    //        oy + t*dy = polygon[j].y + s*ey  →  t*dy - s*ey = qy
+    const denom = ex * dy - ey * dx;
+    if (Math.abs(denom) < 1e-10) continue; // parallel
+
+    const t = (ex * qy - ey * qx) / denom;
+    const s = (dx * qy - dy * qx) / denom;
+
+    if (s >= -1e-6 && s <= 1 + 1e-6) {
+      ts.push(t);
+    }
+  }
+
+  if (ts.length < 2) return [];
+  ts.sort((a, b) => a - b);
+
+  const segs: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+  for (let i = 0; i < ts.length - 1; i++) {
+    const t1 = ts[i], t2 = ts[i + 1];
+    if (t2 - t1 < 0.5) continue; // skip degenerate segments
+
+    const tmid = (t1 + t2) / 2;
+    if (isPointInPolygon(ox + tmid * dx, oy + tmid * dy, polygon)) {
+      // Extend slightly into the wall so the rib box overlaps with the cutter wall
+      segs.push({
+        x1: ox + (t1 - wallPenetration) * dx,
+        y1: oy + (t1 - wallPenetration) * dy,
+        x2: ox + (t2 + wallPenetration) * dx,
+        y2: oy + (t2 + wallPenetration) * dy,
+      });
+    }
+  }
+
+  return segs;
+}
+
+// ─── Shared rib segment generator (used by solid geo + line preview) ─────────
 
 type Seg = { x1: number; y1: number; x2: number; y2: number };
 
 function buildRibSegments(points: Array<{ x: number; y: number }>, ribs: RibSettings): Seg[] {
-  const ribW = ribs.ribWidth;
   const xs = points.map(p => p.x);
   const ys = points.map(p => p.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -118,65 +120,53 @@ function buildRibSegments(points: Array<{ x: number; y: number }>, ribs: RibSett
   const diagLen = Math.hypot(maxX - minX, maxY - minY) * 1.5;
 
   const angleRad = (ribs.angle * Math.PI) / 180;
-  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  const perpX = Math.sin(angleRad),  perpY  = -Math.cos(angleRad);
-  const ribDirX = Math.cos(angleRad), ribDirY = Math.sin(angleRad);
+  // Grid centre = bbox centre + user offset
+  const gridCx = (minX + maxX) / 2 + ribs.offsetX;
+  const gridCy = (minY + maxY) / 2 + ribs.offsetY;
 
-  const segments: Seg[] = [];
-  const steps = Math.ceil(diagLen / ribs.spacing);
+  const ribDirX = Math.cos(angleRad), ribDirY = Math.sin(angleRad);
+  const perpX   = Math.sin(angleRad), perpY   = -Math.cos(angleRad);
+
+  // Each rib endpoint extends into the wall by half its own width so the box
+  // overlaps the cutter wall and forms a solid connected body.
+  const wallPenetration = Math.min(ribs.ribWidth / 2, 2.0);
+  const steps = Math.ceil(diagLen / ribs.spacing) + 2;
+  const segs: Seg[] = [];
 
   for (let i = -steps; i <= steps; i++) {
-    const offsetX = perpX * i * ribs.spacing;
-    const offsetY = perpY * i * ribs.spacing;
-
-    const startX = cx + offsetX - ribDirX * diagLen / 2;
-    const startY = cy + offsetY - ribDirY * diagLen / 2;
-    const endX   = cx + offsetX + ribDirX * diagLen / 2;
-    const endY   = cy + offsetY + ribDirY * diagLen / 2;
-
-    const clipped = clipLineToBbox(
-      startX, startY, endX, endY,
-      minX - ribW, minY - ribW, maxX + ribW, maxY + ribW
-    );
-    if (!clipped) continue;
-
-    const midX = (clipped.x1 + clipped.x2) / 2;
-    const midY = (clipped.y1 + clipped.y2) / 2;
-    if (!isPointInPolygon(midX, midY, points)) continue;
-
-    segments.push(clipped);
+    const lineOx = gridCx + perpX * i * ribs.spacing;
+    const lineOy = gridCy + perpY * i * ribs.spacing;
+    segs.push(...clipLineToPolygon(lineOx, lineOy, ribDirX, ribDirY, points, wallPenetration));
   }
-  return segments;
+
+  return segs;
 }
 
-// ─── Solid rib geometry (baked into STL on Generate click) ──────────────────
+// ─── Solid rib geometry (separate meshes, dark green, baked on Generate) ─────
 
 function generateRibGeometriesForPoints(
   points: Array<{ x: number; y: number }>,
-  ribW: number,
   ribs: RibSettings
 ): THREE.BufferGeometry[] {
-  const ribH = 3.0;
-  const segments = buildRibSegments(points, ribs);
+  const { ribHeight, ribWidth } = ribs;
+  const segs = buildRibSegments(points, ribs);
   const geos: THREE.BufferGeometry[] = [];
 
-  for (const seg of segments) {
+  for (const seg of segs) {
     const segLen = Math.hypot(seg.x2 - seg.x1, seg.y2 - seg.y1);
-    if (segLen < 1.0) continue;
+    if (segLen < 0.5) continue;
 
-    const geo = new THREE.BoxGeometry(segLen, ribH, ribW);
-    geo.translate(0, ribH / 2, 0);
-
-    const ribAngle = Math.atan2(seg.y2 - seg.y1, seg.x2 - seg.x1);
-    geo.rotateY(-ribAngle);
-
+    const geo = new THREE.BoxGeometry(segLen, ribHeight, ribWidth);
+    geo.translate(0, ribHeight / 2, 0); // sit on Y = 0 plane
+    geo.rotateY(-Math.atan2(seg.y2 - seg.y1, seg.x2 - seg.x1));
     geo.translate((seg.x1 + seg.x2) / 2, 0, (seg.y1 + seg.y2) / 2);
     geos.push(geo);
   }
+
   return geos;
 }
 
-// ─── Line positions for live preview in Scene ────────────────────────────────
+// ─── Line preview positions (live, no generation needed) ─────────────────────
 
 export function generateRibLinePositions(
   contour: ContourResult,
@@ -185,14 +175,10 @@ export function generateRibLinePositions(
   if (!ribs.enabled || ribs.spacing <= 0) return [];
 
   const positions: number[] = [];
-  const allPointSets = [
-    contour.points,
-    ...contour.innerContours.map(ic => ic.points),
-  ];
+  const allPoints = [contour.points, ...contour.innerContours.map(ic => ic.points)];
 
-  for (const pts of allPointSets) {
+  for (const pts of allPoints) {
     for (const seg of buildRibSegments(pts, ribs)) {
-      // contour x → world X, contour y → world Z, Y=0.5 above base plane
       positions.push(seg.x1, 0.5, seg.y1, seg.x2, 0.5, seg.y2);
     }
   }
@@ -200,7 +186,50 @@ export function generateRibLinePositions(
   return positions;
 }
 
-// ─── Main entry points ───────────────────────────────────────────────────────
+// ─── Manual geometry merge (avoids mergeGeometries attribute-compatibility issues) ──
+
+export function manualMergeGeometries(geos: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const indices: number[] = [];
+  let vertOffset = 0;
+
+  for (const geo of geos) {
+    const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
+    const normAttr = geo.getAttribute('normal') as THREE.BufferAttribute | undefined;
+
+    for (let i = 0; i < posAttr.count; i++) {
+      positions.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+      if (normAttr) {
+        normals.push(normAttr.getX(i), normAttr.getY(i), normAttr.getZ(i));
+      } else {
+        normals.push(0, 1, 0);
+      }
+    }
+
+    if (geo.index) {
+      const idx = geo.index;
+      for (let i = 0; i < idx.count; i++) {
+        indices.push(idx.getX(i) + vertOffset);
+      }
+    } else {
+      for (let i = 0; i < posAttr.count; i++) {
+        indices.push(i + vertOffset);
+      }
+    }
+
+    vertOffset += posAttr.count;
+  }
+
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  merged.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  merged.setIndex(indices);
+  merged.computeVertexNormals();
+  return merged;
+}
+
+// ─── Main entry point ────────────────────────────────────────────────────────
 
 export interface CutterGenerationResult {
   cutterGeometries: THREE.BufferGeometry[];
@@ -229,7 +258,7 @@ export function generateAllCutterGeometries(
   for (const c of allContours) {
     cutterGeometries.push(generateCutterGeometry(c, profile));
     if (ribSettings?.enabled) {
-      ribGeometries.push(...generateRibGeometriesForPoints(c.points, profile.b, ribSettings));
+      ribGeometries.push(...generateRibGeometriesForPoints(c.points, ribSettings));
     }
   }
 
