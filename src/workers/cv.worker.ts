@@ -9,16 +9,16 @@ const cvReady = new Promise<void>((resolve) => { resolveCV = resolve; });
 
 (self as any).Module = { onRuntimeInitialized() { resolveCV(); } };
 
-// importScripts works in classic workers (production); in Vite dev mode the
-// worker is a module worker where importScripts is unavailable — fall back to
-// fetch + indirect eval so the same source works in both environments.
+// importScripts works in classic workers (production build).
+// Vite dev mode creates module workers where importScripts is unavailable —
+// fall back to fetch + indirect eval so both environments work.
 if (typeof importScripts === 'function') {
   importScripts(OPENCV_URL);
 } else {
   fetch(OPENCV_URL)
     .then(r => r.text())
     .then(code => { (0, eval)(code); })
-    .catch(err => { console.error('Failed to load OpenCV.js:', err); });
+    .catch(err => { console.error('[cv.worker] Failed to load OpenCV.js:', err); });
 }
 
 function chaikin(pts: {x:number;y:number}[], iters: number): {x:number;y:number}[] {
@@ -48,53 +48,64 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     await cvReady;
     const _cv = (self as any).cv;
 
-    const src    = M(_cv.matFromImageData(imageData));
-    const gray   = M(new _cv.Mat());
-    _cv.cvtColor(src, gray, _cv.COLOR_RGBA2GRAY);
-    const blurred = M(new _cv.Mat());
-    _cv.GaussianBlur(gray, blurred, new _cv.Size(5, 5), 0);
-    const binary = M(new _cv.Mat());
+    // ── Step 1: Convert to true black-and-white ───────────────────────────
+    // Normalize contrast first so faint ink and dark ink are both driven to
+    // black, then apply a single global threshold to get a clean 2-colour
+    // image with no intermediate shades.
 
+    const src   = M(_cv.matFromImageData(imageData));
+    const gray  = M(new _cv.Mat());
+    _cv.cvtColor(src, gray, _cv.COLOR_RGBA2GRAY);
+
+    // Stretch the pixel range to [0, 255] so that the darkest pixels
+    // (ink) become 0 and the lightest (paper) become 255.  This makes
+    // faint loops visible to a single global threshold.
+    _cv.normalize(gray, gray, 0, 255, _cv.NORM_MINMAX);
+
+    // Light blur to kill single-pixel noise without softening ink edges.
+    const blurred = M(new _cv.Mat());
+    _cv.GaussianBlur(gray, blurred, new _cv.Size(3, 3), 0);
+
+    // Binarise: anything darker than the threshold becomes white (ink),
+    // everything else black (background) — THRESH_BINARY_INV.
+    // Auto mode uses Otsu which finds the paper/ink valley automatically.
+    // Manual mode uses the user-supplied value on the normalised image.
+    const binary = M(new _cv.Mat());
     if (settings.threshold === 'auto') {
-      const shortDim = Math.min(W, H);
-      let blockSize = Math.max(11, Math.round(shortDim / 20));
-      if (blockSize % 2 === 0) blockSize += 1;
-      try {
-        _cv.adaptiveThreshold(blurred, binary, 255,
-          _cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-          _cv.THRESH_BINARY_INV,
-          blockSize, 8);
-      } catch {
-        // Fall back to Otsu if adaptiveThreshold fails
-        _cv.threshold(blurred, binary, 0, 255,
-          (_cv.THRESH_BINARY_INV | _cv.THRESH_OTSU));
-      }
+      _cv.threshold(blurred, binary, 0, 255,
+        (_cv.THRESH_BINARY_INV | _cv.THRESH_OTSU));
     } else {
-      _cv.threshold(blurred, binary, settings.threshold as number, 255,
+      _cv.threshold(blurred, binary,
+        settings.threshold as number, 255,
         _cv.THRESH_BINARY_INV);
     }
 
+    // ── Step 2: Morphological cleanup ─────────────────────────────────────
+    // CLOSE seals small pen-lift gaps; OPEN removes isolated noise dots.
     const k3     = M(_cv.getStructuringElement(_cv.MORPH_RECT, new _cv.Size(3, 3)));
     const closed = M(new _cv.Mat());
     _cv.morphologyEx(binary, closed, _cv.MORPH_CLOSE, k3, new _cv.Point(-1, -1), 1);
     const opened = M(new _cv.Mat());
     _cv.morphologyEx(closed, opened, _cv.MORPH_OPEN, k3, new _cv.Point(-1, -1), 1);
 
+    // ── Step 3: Find all closed contours ─────────────────────────────────
+    // RETR_LIST returns every independent closed loop without hierarchy, so
+    // all shapes (outer and inner) are treated equally.
     const contours  = M(new _cv.MatVector());
     const hierarchy = M(new _cv.Mat());
-    // RETR_LIST=1, CHAIN_APPROX_SIMPLE=2  (use numeric fallbacks for safety)
     _cv.findContours(opened, contours, hierarchy,
-      _cv.RETR_LIST   ?? 1,
+      _cv.RETR_LIST    ?? 1,
       _cv.CHAIN_APPROX_SIMPLE ?? 2);
 
+    // ── Step 4: Filter and simplify each candidate loop ──────────────────
     const minArea = imageArea * 0.0005;
     const diag    = Math.hypot(W, H);
 
     interface RawLoop {
-      pts: Array<{x: number; y: number}>;
+      pts:  Array<{x: number; y: number}>;
       area: number;
-      cx: number;
-      cy: number;
+      cx:   number;
+      cy:   number;
     }
 
     const raw: RawLoop[] = [];
@@ -105,19 +116,19 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       if (area < minArea) continue;
 
       const rect = _cv.boundingRect(c);
-      // Skip frame-edge and near-full-image contours
+      // Reject contours that span the entire image (photo border artefact).
       if (rect.x <= 2 && rect.y <= 2 &&
           rect.x + rect.width  >= W - 2 &&
           rect.y + rect.height >= H - 2) continue;
       if (rect.width * rect.height > imageArea * 0.92) continue;
 
       const perimeter = _cv.arcLength(c, true);
-      // Roughness: raw pixel contour perimeter vs ideal circular perimeter.
-      // >6 = very jagged noise blob; threshold relaxed from 4 because
-      // adaptive-threshold contours have more pixel-level staircase than Otsu.
+      // Roughness: ratio of actual perimeter to ideal circular perimeter.
+      // Values > 6 indicate very jagged noise rather than a drawn shape.
       const roughness = perimeter / (2 * Math.sqrt(Math.PI * area));
       if (roughness > 6.0) continue;
 
+      // Adaptive epsilon keeps large contours detailed and small ones smooth.
       const epsilon = Math.max(1.5, Math.min(0.005 * perimeter, 8.0));
       const approx  = new _cv.Mat();
       _cv.approxPolyDP(c, approx, epsilon, true);
@@ -140,7 +151,9 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       });
     }
 
-    // Concentric dedup: two edges of the same ink stroke → keep the larger
+    // ── Step 5: Deduplication ─────────────────────────────────────────────
+    // Concentric dedup: adaptive-threshold creates inner + outer edge of
+    // each ink stroke as two concentric contours.  Keep the larger one.
     const afterConcentric: RawLoop[] = [];
     for (const loop of raw) {
       let absorbed = false;
@@ -155,10 +168,10 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       if (!absorbed) afterConcentric.push(loop);
     }
 
-    // Sort by area descending before proximity check
     afterConcentric.sort((a, b) => b.area - a.area);
 
-    // Proximity dedup: nearly-touching smaller sibling → remove
+    // Proximity dedup: smaller loop whose bounding box nearly coincides with
+    // a larger one and is less than half its area → remove.
     function getBbox(pts: Array<{x:number;y:number}>) {
       const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
       return { x1: Math.min(...xs), y1: Math.min(...ys),
@@ -187,18 +200,18 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       cleanup();
       self.postMessage({
         type: 'ERROR',
-        message: 'No shape detected. Ensure a clear outline on a lighter background.',
+        message: 'No shape detected. Try adjusting the threshold slider or ensure the drawing has a clear outline.',
       } as CVWorkerError);
       return;
     }
 
-    // Select up to expectedLoops (0 = all)
+    // ── Step 6: Select up to expectedLoops results ────────────────────────
     const take = settings.expectedLoops <= 0
       ? afterProximity.length
       : Math.min(settings.expectedLoops, afterProximity.length);
     const selected = afterProximity.slice(0, take);
 
-    // Scale using primary loop's pixel bounding box
+    // ── Step 7: Scale to mm and smooth ────────────────────────────────────
     const primary = selected[0];
     const primYs  = primary.pts.map(p => p.y);
     const primXs  = primary.pts.map(p => p.x);
@@ -233,9 +246,12 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       loops:         finalLoops,
       points:        finalLoops[0].points,
       pixelPoints:   finalLoops[0].pixelPoints,
-      innerContours: finalLoops.slice(1).map(l => ({ points: l.points, pixelPoints: l.pixelPoints })),
-      imageWidth:    W,
-      imageHeight:   H,
+      innerContours: finalLoops.slice(1).map(l => ({
+        points:      l.points,
+        pixelPoints: l.pixelPoints,
+      })),
+      imageWidth:  W,
+      imageHeight: H,
     };
 
     self.postMessage({ type: 'CONTOUR_RESULT', result } as CVWorkerResult);
