@@ -16,6 +16,7 @@ const defaultSettings: AppSettings = {
     offsetY: 0,
   },
   threshold: 'auto',
+  expectedLoops: 1,
 };
 
 type ProcessingState = 'idle' | 'processing' | 'done' | 'error';

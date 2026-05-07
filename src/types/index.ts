@@ -21,6 +21,7 @@ export interface AppSettings {
   cutterProfile: CutterProfile;
   ribSettings: RibSettings;
   threshold: number | 'auto'; // 'auto' = multi-threshold scan; number = fixed threshold
+  expectedLoops: number;      // how many loops to return (0 = all detected)
 }
 
 export interface LoopResult {
@@ -51,6 +52,7 @@ export interface CVWorkerMessage {
     shapePerfection: number;
     targetHeightMm: number;
     threshold: number | 'auto';
+    expectedLoops: number;
   };
 }
 

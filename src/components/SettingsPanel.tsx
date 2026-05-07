@@ -121,6 +121,7 @@ export function SettingsPanel() {
           smoothing: settings.smoothing,
           shapePerfection: settings.shapePerfection,
           targetHeightMm: settings.targetHeightMm,
+          expectedLoops: settings.expectedLoops,
         },
       });
     } catch (err: any) {
@@ -299,6 +300,20 @@ export function SettingsPanel() {
             type="range" min={8} max={300} step={5}
             value={settings.targetHeightMm}
             onChange={(e) => updateSettings({ targetHeightMm: parseInt(e.target.value) })}
+            style={sliderStyle}
+          />
+        </div>
+
+        {/* Number of loops */}
+        <div style={{ marginBottom: '10px' }}>
+          <div style={labelStyle}>
+            <span>Loops to detect</span>
+            <span style={valueStyle}>{settings.expectedLoops}</span>
+          </div>
+          <input
+            type="range" min={1} max={6} step={1}
+            value={settings.expectedLoops}
+            onChange={(e) => updateSettings({ expectedLoops: parseInt(e.target.value) })}
             style={sliderStyle}
           />
         </div>
