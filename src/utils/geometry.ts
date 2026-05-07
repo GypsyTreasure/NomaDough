@@ -127,9 +127,9 @@ function buildRibSegments(points: Array<{ x: number; y: number }>, ribs: RibSett
   const ribDirX = Math.cos(angleRad), ribDirY = Math.sin(angleRad);
   const perpX   = Math.sin(angleRad), perpY   = -Math.cos(angleRad);
 
-  // Each rib endpoint extends into the wall by half its own width so the box
-  // overlaps the cutter wall and forms a solid connected body.
-  const wallPenetration = Math.min(ribs.ribWidth / 2, 2.0);
+  // wallPenetration = 0: rib endpoints land exactly on the polygon boundary.
+  // Any positive value pushes the box outside the wall and causes visible protrusion.
+  const wallPenetration = 0;
   const steps = Math.ceil(diagLen / ribs.spacing) + 2;
   const segs: Seg[] = [];
 
@@ -175,12 +175,10 @@ export function generateRibLinePositions(
   if (!ribs.enabled || ribs.spacing <= 0) return [];
 
   const positions: number[] = [];
-  const allPoints = [contour.points, ...contour.innerContours.map(ic => ic.points)];
 
-  for (const pts of allPoints) {
-    for (const seg of buildRibSegments(pts, ribs)) {
-      positions.push(seg.x1, 0.5, seg.y1, seg.x2, 0.5, seg.y2);
-    }
+  // Preview lines only for main contour (same rule as solid geometry)
+  for (const seg of buildRibSegments(contour.points, ribs)) {
+    positions.push(seg.x1, 0.5, seg.y1, seg.x2, 0.5, seg.y2);
   }
 
   return positions;
@@ -257,9 +255,12 @@ export function generateAllCutterGeometries(
 
   for (const c of allContours) {
     cutterGeometries.push(generateCutterGeometry(c, profile));
-    if (ribSettings?.enabled) {
-      ribGeometries.push(...generateRibGeometriesForPoints(c.points, ribSettings));
-    }
+  }
+
+  // Ribs only on the main (outer) contour — clip to its polygon, which naturally
+  // spans inner-loop areas so ribs crosscut secondary loops without stopping at them.
+  if (ribSettings?.enabled) {
+    ribGeometries.push(...generateRibGeometriesForPoints(contour.points, ribSettings));
   }
 
   return { cutterGeometries, ribGeometries };
