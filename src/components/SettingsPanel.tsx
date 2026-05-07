@@ -540,20 +540,18 @@ export function SettingsPanel() {
           disabled={!hasGeometry}
           style={btnOutline(hasGeometry)}
         >
-          {geometries.length > 1 ? `Export STL (${geometries.length} files)` : 'Export STL'}
+          Export STL
         </button>
 
         {stlSizeKb && (
           <div style={{ color: '#7A9BB8', fontSize: '11px', fontFamily: 'monospace', textAlign: 'center', marginTop: '2px' }}>
-            STL: {stlSizeKb} KB{geometries.length > 1 ? ` × ${geometries.length}` : ''}
+            STL: {stlSizeKb} KB
           </div>
         )}
 
         {hasGeometry && (
           <div style={{ color: '#1A3558', fontSize: '10px', textAlign: 'center', marginTop: '4px', wordBreak: 'break-all' }}>
-            {geometries.length > 1
-              ? buildExportFilename(imageFile).replace('.STL', '-loop1…N.STL')
-              : buildExportFilename(imageFile)}
+            {buildExportFilename(imageFile)}
           </div>
         )}
       </div>
