@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useAppStore } from '../store/useAppStore';
 import { useGeometryStore } from '../store/useGeometryStore';
 import { ImageUpload } from './ImageUpload';
@@ -9,6 +9,13 @@ import { exportAllSTLs, buildExportFilename } from '../utils/exporter';
 import { fileToImageData } from '../utils/cv-helpers';
 import type { CVWorkerResult, CVWorkerError } from '../types';
 
+const DARKNESS_MAP = { light: 180, medium: 128, dark: 70 } as const;
+const DARKNESS_LABELS = {
+  light: 'Light grey / white background',
+  medium: 'Standard paper',
+  dark: 'Coloured / warm background',
+} as const;
+type DarknessTier = keyof typeof DARKNESS_MAP;
 
 const labelStyle: React.CSSProperties = {
   display: 'flex',
@@ -41,6 +48,11 @@ const sectionStyle: React.CSSProperties = {
   borderBottom: '1px solid #1A3558',
 };
 
+const sliderStyle: React.CSSProperties = {
+  width: '100%',
+  accentColor: '#7EC845',
+};
+
 export function SettingsPanel() {
   const settings = useAppStore((s) => s.settings);
   const updateProfile = useAppStore((s) => s.updateProfile);
@@ -64,7 +76,10 @@ export function SettingsPanel() {
 
   const workerRef = useRef<Worker | null>(null);
 
-  const isManual = settings.detectionMode === 'manual';
+  // Threshold UX local state
+  const [thresholdAuto, setThresholdAuto] = useState(true);
+  const [darknessTier, setDarknessTier] = useState<DarknessTier>('light');
+  const [fineTune, setFineTune] = useState(0);
 
   const handleDetect = useCallback(async () => {
     if (!imageFile) return;
@@ -102,8 +117,7 @@ export function SettingsPanel() {
         type: 'PROCESS_IMAGE',
         imageData,
         settings: {
-          detectionMode: settings.detectionMode,
-          loopThresholds: settings.loopThresholds,
+          threshold: thresholdAuto ? 'auto' : settings.threshold,
           smoothing: settings.smoothing,
           shapePerfection: settings.shapePerfection,
           targetHeightMm: settings.targetHeightMm,
@@ -112,7 +126,7 @@ export function SettingsPanel() {
     } catch (err: any) {
       setProcessingState('error', err.message ?? 'Failed to process image.');
     }
-  }, [imageFile, settings, setContourResult, setProcessingState]);
+  }, [imageFile, settings, thresholdAuto, setContourResult, setProcessingState]);
 
   const handleGenerate = useCallback(() => {
     if (!contourResult) return;
@@ -138,22 +152,6 @@ export function SettingsPanel() {
     const blob = exportAllSTLs(geometries, ribGeometries, imageFile);
     setStlBlob(blob);
   }, [geometries, ribGeometries, imageFile, setStlBlob]);
-
-  const updateThreshold = (index: number, value: number) => {
-    const next = [...settings.loopThresholds];
-    next[index] = value;
-    updateSettings({ loopThresholds: next });
-  };
-
-  const addLoop = () => {
-    updateSettings({ loopThresholds: [...settings.loopThresholds, 128] });
-  };
-
-  const removeLoop = (index: number) => {
-    if (settings.loopThresholds.length <= 1) return;
-    const next = settings.loopThresholds.filter((_, i) => i !== index);
-    updateSettings({ loopThresholds: next });
-  };
 
   const stlSizeKb = stlBlob ? (stlBlob.size / 1024).toFixed(1) : null;
   const hasGeometry = geometries.length > 0;
@@ -192,20 +190,6 @@ export function SettingsPanel() {
     marginBottom: '8px',
   });
 
-  const modeTabStyle = (active: boolean): React.CSSProperties => ({
-    flex: 1,
-    padding: '5px 0',
-    borderRadius: '4px',
-    border: 'none',
-    cursor: 'pointer',
-    fontSize: '11px',
-    fontFamily: 'monospace',
-    fontWeight: 600,
-    background: active ? '#22C59A' : 'transparent',
-    color: active ? '#0D1B2A' : '#7A9BB8',
-    transition: 'all 0.15s',
-  });
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', padding: '16px', overflowY: 'auto', height: '100%', gap: '0' }}>
 
@@ -217,121 +201,90 @@ export function SettingsPanel() {
           <ImageUpload />
         </div>
 
-        {/* Detection Mode toggle */}
+        {/* Line darkness preset */}
         <div style={{ marginBottom: '12px' }}>
-          <div style={{ ...labelStyle, marginBottom: '8px' }}>
-            <span>Detection Mode</span>
-          </div>
-          <div style={{
-            display: 'flex',
-            gap: '2px',
-            background: '#0A1929',
-            borderRadius: '6px',
-            padding: '2px',
-            border: '1px solid #1A3558',
-            marginBottom: '10px',
-          }}>
-            <button
-              style={modeTabStyle(!isManual)}
-              onClick={() => updateSettings({ detectionMode: 'auto' })}
-            >
-              Auto
-            </button>
-            <button
-              style={modeTabStyle(isManual)}
-              onClick={() => updateSettings({ detectionMode: 'manual' })}
-            >
-              Manual
-            </button>
+          <div style={labelStyle}>
+            <span>Line darkness</span>
+            <span style={valueStyle}>{DARKNESS_LABELS[darknessTier]}</span>
           </div>
 
-          {!isManual ? (
-            <div style={{ color: '#7A9BB8', fontSize: '10px', fontFamily: 'monospace' }}>
-              Otsu's method auto-detects all loops and thresholds.
-            </div>
-          ) : (
-            /* Per-loop threshold sliders */
-            <div>
-              {settings.loopThresholds.map((thresh, i) => (
-                <div key={i} style={{ marginBottom: '10px' }}>
-                  <div style={{ ...labelStyle, marginBottom: '4px' }}>
-                    <span style={{ color: i === 0 ? '#7EC845' : '#FF8C00', fontWeight: 600 }}>
-                      Loop {i + 1}
-                    </span>
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      <input
-                        type="number"
-                        min={0}
-                        max={255}
-                        value={thresh}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value);
-                          if (!isNaN(v)) updateThreshold(i, Math.max(0, Math.min(255, v)));
-                        }}
-                        style={{
-                          width: '44px',
-                          padding: '2px 4px',
-                          borderRadius: '4px',
-                          border: '1px solid #1A3558',
-                          background: '#0D1B2A',
-                          color: '#F0F0F0',
-                          fontSize: '11px',
-                          fontFamily: 'monospace',
-                          textAlign: 'center',
-                        }}
-                      />
-                      {settings.loopThresholds.length > 1 && (
-                        <button
-                          onClick={() => removeLoop(i)}
-                          style={{
-                            padding: '2px 6px',
-                            borderRadius: '4px',
-                            border: '1px solid #1A3558',
-                            background: 'transparent',
-                            color: '#7A9BB8',
-                            cursor: 'pointer',
-                            fontSize: '12px',
-                            lineHeight: '1',
-                          }}
-                          title="Remove this loop"
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={255}
-                    step={1}
-                    value={thresh}
-                    onChange={(e) => updateThreshold(i, parseInt(e.target.value))}
-                    style={{ accentColor: i === 0 ? '#7EC845' : '#FF8C00' }}
-                  />
-                </div>
-              ))}
+          {/* Three-button toggle */}
+          <div style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+            {(['light', 'medium', 'dark'] as const).map(tier => (
               <button
-                onClick={addLoop}
-                disabled={settings.loopThresholds.length >= 10}
+                key={tier}
+                onClick={() => {
+                  setDarknessTier(tier);
+                  setThresholdAuto(false);
+                  updateSettings({ threshold: DARKNESS_MAP[tier] + fineTune });
+                }}
                 style={{
-                  width: '100%',
-                  padding: '5px',
+                  flex: 1,
+                  padding: '5px 0',
                   borderRadius: '4px',
-                  border: '1px dashed #1A3558',
-                  background: 'transparent',
-                  color: settings.loopThresholds.length < 10 ? '#7A9BB8' : '#1A3558',
-                  cursor: settings.loopThresholds.length < 10 ? 'pointer' : 'not-allowed',
+                  border: `1px solid ${darknessTier === tier && !thresholdAuto ? '#7EC845' : '#2a2a2a'}`,
+                  background: darknessTier === tier && !thresholdAuto ? '#1a2a10' : 'transparent',
+                  color: darknessTier === tier && !thresholdAuto ? '#7EC845' : '#888888',
+                  cursor: 'pointer',
                   fontSize: '11px',
-                  fontFamily: 'monospace',
-                  marginBottom: '4px',
+                  fontFamily: 'Inter, sans-serif',
+                  textTransform: 'capitalize',
                 }}
               >
-                + Add Loop
+                {tier}
               </button>
-              <div style={{ color: '#1A3558', fontSize: '10px', fontFamily: 'monospace' }}>
-                Each loop runs a separate detection pass with its threshold.
+            ))}
+          </div>
+
+          {/* Auto toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+            <button
+              onClick={() => {
+                const newAuto = !thresholdAuto;
+                setThresholdAuto(newAuto);
+                updateSettings({ threshold: newAuto ? 'auto' : DARKNESS_MAP[darknessTier] + fineTune });
+              }}
+              style={{
+                padding: '3px 10px',
+                borderRadius: '4px',
+                border: `1px solid ${thresholdAuto ? '#7EC845' : '#2a2a2a'}`,
+                background: thresholdAuto ? '#1a2a10' : 'transparent',
+                color: thresholdAuto ? '#7EC845' : '#888888',
+                cursor: 'pointer',
+                fontSize: '10px',
+                fontFamily: 'monospace',
+              }}
+            >
+              Auto detect
+            </button>
+            <span style={{ color: '#555', fontSize: '10px' }}>
+              {thresholdAuto ? '— tries multiple settings automatically' : '— use sliders above'}
+            </span>
+          </div>
+
+          {/* Fine-tune: only shown when not auto */}
+          {!thresholdAuto && (
+            <div>
+              <div style={{ ...labelStyle, marginTop: '4px' }}>
+                <span style={{ color: '#666', fontSize: '11px' }}>Fine-tune</span>
+                <span style={valueStyle}>
+                  {fineTune > 0 ? `+${fineTune}` : fineTune}
+                  {' '}(darker ← → lighter)
+                </span>
               </div>
+              <input
+                type="range"
+                min={-30}
+                max={30}
+                step={5}
+                value={fineTune}
+                onChange={(e) => {
+                  const ft = parseInt(e.target.value);
+                  setFineTune(ft);
+                  updateSettings({ threshold: DARKNESS_MAP[darknessTier] + ft });
+                }}
+                style={sliderStyle}
+              />
             </div>
           )}
         </div>
@@ -346,6 +299,7 @@ export function SettingsPanel() {
             type="range" min={8} max={300} step={5}
             value={settings.targetHeightMm}
             onChange={(e) => updateSettings({ targetHeightMm: parseInt(e.target.value) })}
+            style={sliderStyle}
           />
         </div>
 
@@ -359,6 +313,7 @@ export function SettingsPanel() {
             type="range" min={0} max={10} step={1}
             value={settings.smoothing}
             onChange={(e) => updateSettings({ smoothing: parseInt(e.target.value) })}
+            style={sliderStyle}
           />
         </div>
 
@@ -375,6 +330,7 @@ export function SettingsPanel() {
             type="range" min={0.0} max={1.0} step={0.01}
             value={settings.shapePerfection}
             onChange={(e) => updateSettings({ shapePerfection: parseFloat(e.target.value) })}
+            style={sliderStyle}
           />
         </div>
 
@@ -402,6 +358,7 @@ export function SettingsPanel() {
             type="range" min={0.1} max={2.0} step={0.05}
             value={settings.cutterProfile.a}
             onChange={(e) => updateProfile({ a: parseFloat(e.target.value) })}
+            style={sliderStyle}
           />
         </div>
 
@@ -414,6 +371,7 @@ export function SettingsPanel() {
             type="range" min={1.0} max={8.0} step={0.1}
             value={settings.cutterProfile.b}
             onChange={(e) => updateProfile({ b: parseFloat(e.target.value) })}
+            style={sliderStyle}
           />
         </div>
 
@@ -426,6 +384,7 @@ export function SettingsPanel() {
             type="range" min={5} max={50} step={1}
             value={settings.cutterProfile.c}
             onChange={(e) => updateProfile({ c: parseFloat(e.target.value) })}
+            style={sliderStyle}
           />
         </div>
 
@@ -459,7 +418,8 @@ export function SettingsPanel() {
           </div>
           <input type="range" min={5} max={50} step={1}
             value={ribSettings.spacing} disabled={ribsDisabled}
-            onChange={(e) => updateRibSettings({ spacing: parseInt(e.target.value) })} />
+            onChange={(e) => updateRibSettings({ spacing: parseInt(e.target.value) })}
+            style={sliderStyle} />
         </div>
 
         {/* Grid angle */}
@@ -470,7 +430,8 @@ export function SettingsPanel() {
           </div>
           <input type="range" min={0} max={90} step={5}
             value={ribSettings.angle} disabled={ribsDisabled}
-            onChange={(e) => updateRibSettings({ angle: parseInt(e.target.value) })} />
+            onChange={(e) => updateRibSettings({ angle: parseInt(e.target.value) })}
+            style={sliderStyle} />
           <div style={{ color: '#1A3558', fontSize: '10px', fontFamily: 'monospace', marginTop: '2px' }}>
             0° = parallel · 45° = diagonal · 90° = perpendicular
           </div>
@@ -484,7 +445,8 @@ export function SettingsPanel() {
           </div>
           <input type="range" min={1} max={10} step={0.5}
             value={ribSettings.ribHeight} disabled={ribsDisabled}
-            onChange={(e) => updateRibSettings({ ribHeight: parseFloat(e.target.value) })} />
+            onChange={(e) => updateRibSettings({ ribHeight: parseFloat(e.target.value) })}
+            style={sliderStyle} />
         </div>
 
         {/* Rib width */}
@@ -495,7 +457,8 @@ export function SettingsPanel() {
           </div>
           <input type="range" min={0.5} max={5} step={0.1}
             value={ribSettings.ribWidth} disabled={ribsDisabled}
-            onChange={(e) => updateRibSettings({ ribWidth: parseFloat(e.target.value) })} />
+            onChange={(e) => updateRibSettings({ ribWidth: parseFloat(e.target.value) })}
+            style={sliderStyle} />
         </div>
 
         {/* Grid centre offset */}
@@ -506,7 +469,8 @@ export function SettingsPanel() {
           </div>
           <input type="range" min={-50} max={50} step={1}
             value={ribSettings.offsetX} disabled={ribsDisabled}
-            onChange={(e) => updateRibSettings({ offsetX: parseInt(e.target.value) })} />
+            onChange={(e) => updateRibSettings({ offsetX: parseInt(e.target.value) })}
+            style={sliderStyle} />
         </div>
 
         <div style={{ marginBottom: '10px', opacity: ribsDisabled ? 0.4 : 1, transition: 'opacity 0.15s' }}>
@@ -516,7 +480,8 @@ export function SettingsPanel() {
           </div>
           <input type="range" min={-50} max={50} step={1}
             value={ribSettings.offsetY} disabled={ribsDisabled}
-            onChange={(e) => updateRibSettings({ offsetY: parseInt(e.target.value) })} />
+            onChange={(e) => updateRibSettings({ offsetY: parseInt(e.target.value) })}
+            style={sliderStyle} />
           <div style={{ color: '#1A3558', fontSize: '10px', fontFamily: 'monospace', marginTop: '2px' }}>
             Grid starts at bbox centre + offset. Rib ends always land on wall.
           </div>

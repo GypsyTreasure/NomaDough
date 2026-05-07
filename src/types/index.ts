@@ -20,14 +20,22 @@ export interface AppSettings {
   shapePerfection: number;  // 0.0 (organic/curved) to 1.0 (geometric/straight)
   cutterProfile: CutterProfile;
   ribSettings: RibSettings;
-  detectionMode: 'auto' | 'manual';
-  loopThresholds: number[]; // manual: one per loop; auto: unused
+  threshold: number | 'auto'; // 'auto' = multi-threshold scan; number = fixed threshold
+}
+
+export interface LoopResult {
+  points: Array<{ x: number; y: number }>;
+  pixelPoints: Array<{ x: number; y: number }>;
+  role: 'outer' | 'inner';
 }
 
 export interface ContourResult {
-  points: Array<{ x: number; y: number }>;       // Main contour scaled to mm
-  pixelPoints: Array<{ x: number; y: number }>;  // Main contour original pixel coords
-  innerContours: Array<{                          // Additional loops (same coordinate space)
+  loops?: LoopResult[];
+  // Legacy fields — always equal to loops[0] for backwards compat
+  points: Array<{ x: number; y: number }>;
+  pixelPoints: Array<{ x: number; y: number }>;
+  // Legacy innerContours for geometry.ts compatibility
+  innerContours: Array<{
     points: Array<{ x: number; y: number }>;
     pixelPoints: Array<{ x: number; y: number }>;
   }>;
@@ -42,8 +50,7 @@ export interface CVWorkerMessage {
     smoothing: number;
     shapePerfection: number;
     targetHeightMm: number;
-    detectionMode: 'auto' | 'manual';
-    loopThresholds: number[]; // manual: N values for N loops; auto: ignored
+    threshold: number | 'auto';
   };
 }
 

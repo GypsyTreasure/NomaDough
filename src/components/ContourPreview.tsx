@@ -1,6 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { useAppStore } from '../store/useAppStore';
 
+const LOOP_COLORS = ['#7EC845', '#FFA500', '#00CFFF', '#FF69B4'];
+
 export function ContourPreview() {
   const contourResult = useAppStore((s) => s.contourResult);
   const imageUrl = useAppStore((s) => s.imageUrl);
@@ -26,40 +28,27 @@ export function ContourPreview() {
       ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       ctx.globalAlpha = 1.0;
 
-      if (contourResult && contourResult.pixelPoints.length > 2) {
+      if (contourResult?.loops?.length) {
         const scaleX = canvas.width / contourResult.imageWidth;
         const scaleY = canvas.height / contourResult.imageHeight;
 
-        // Draw main contour — solid green
-        const pts = contourResult.pixelPoints;
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x * scaleX, pts[0].y * scaleY);
-        for (let i = 1; i < pts.length; i++) {
-          ctx.lineTo(pts[i].x * scaleX, pts[i].y * scaleY);
-        }
-        ctx.closePath();
-        ctx.strokeStyle = '#7EC845';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.fillStyle = 'rgba(126, 200, 69, 0.07)';
-        ctx.fill();
+        contourResult.loops.forEach((loop, idx) => {
+          const color = LOOP_COLORS[Math.min(idx, LOOP_COLORS.length - 1)];
+          const pts = loop.pixelPoints;
+          if (pts.length < 3) return;
 
-        // Draw inner contours — solid orange
-        for (const inner of contourResult.innerContours) {
-          if (inner.pixelPoints.length < 3) continue;
-          const ipts = inner.pixelPoints;
           ctx.beginPath();
-          ctx.moveTo(ipts[0].x * scaleX, ipts[0].y * scaleY);
-          for (let i = 1; i < ipts.length; i++) {
-            ctx.lineTo(ipts[i].x * scaleX, ipts[i].y * scaleY);
+          ctx.moveTo(pts[0].x * scaleX, pts[0].y * scaleY);
+          for (let i = 1; i < pts.length; i++) {
+            ctx.lineTo(pts[i].x * scaleX, pts[i].y * scaleY);
           }
           ctx.closePath();
-          ctx.strokeStyle = '#FF8C00';
-          ctx.lineWidth = 2;
+          ctx.strokeStyle = color;
+          ctx.lineWidth = idx === 0 ? 2 : 1.5;
           ctx.stroke();
-          ctx.fillStyle = 'rgba(255, 140, 0, 0.07)';
+          ctx.fillStyle = `${color}14`;
           ctx.fill();
-        }
+        });
       } else if (processingError) {
         ctx.setLineDash([6, 4]);
         ctx.strokeStyle = '#E05050';
@@ -73,18 +62,12 @@ export function ContourPreview() {
 
   if (!imageUrl) return null;
 
-  const mmPoints = contourResult?.points ?? [];
+  const loops = contourResult?.loops ?? [];
+  const mmPoints = loops[0]?.points ?? [];
   const xs = mmPoints.map((p) => p.x);
   const ys = mmPoints.map((p) => p.y);
   const wMm = mmPoints.length > 0 ? Math.round(Math.max(...xs) - Math.min(...xs)) : null;
   const hMm = mmPoints.length > 0 ? Math.round(Math.max(...ys) - Math.min(...ys)) : null;
-
-  const innerCount = contourResult?.innerContours.length ?? 0;
-  const loopStatusText = contourResult
-    ? innerCount > 0
-      ? `Detected: 1 main loop + ${innerCount} inner loop${innerCount > 1 ? 's' : ''}`
-      : 'Detected: 1 loop'
-    : null;
 
   return (
     <div>
@@ -105,16 +88,26 @@ export function ContourPreview() {
         )}
       </div>
 
-      {contourResult && (
+      {contourResult && loops.length > 0 && (
         <div style={{ color: '#7A9BB8', fontSize: '11px', marginTop: '6px', fontFamily: 'monospace' }}>
-          {contourResult.pixelPoints.length} pts
-          {wMm !== null && hMm !== null && ` · ~${wMm}×${hMm} mm`}
+          {loops.length} loop{loops.length !== 1 ? 's' : ''} detected
+          {' · '}
+          {loops[0].pixelPoints.length} pts (primary)
+          {wMm !== null && hMm !== null && ` | ~${wMm}×${hMm} mm`}
         </div>
       )}
 
-      {loopStatusText && (
-        <div style={{ fontSize: '11px', marginTop: '3px', fontFamily: 'monospace', color: innerCount > 0 ? '#FF8C00' : '#7EC845' }}>
-          {loopStatusText}
+      {contourResult && loops.length > 1 && (
+        <div style={{ display: 'flex', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+          {loops.map((loop, idx) => (
+            <span key={idx} style={{
+              fontSize: '10px',
+              fontFamily: 'monospace',
+              color: LOOP_COLORS[Math.min(idx, LOOP_COLORS.length - 1)],
+            }}>
+              ● {loop.role} {idx + 1}
+            </span>
+          ))}
         </div>
       )}
 

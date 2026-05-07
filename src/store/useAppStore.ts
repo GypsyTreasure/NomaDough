@@ -15,8 +15,7 @@ const defaultSettings: AppSettings = {
     offsetX: 0,
     offsetY: 0,
   },
-  detectionMode: 'auto',
-  loopThresholds: [128],
+  threshold: 'auto',
 };
 
 type ProcessingState = 'idle' | 'processing' | 'done' | 'error';
