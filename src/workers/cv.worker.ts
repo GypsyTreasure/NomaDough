@@ -20,77 +20,6 @@ if (typeof importScripts === 'function') {
     .catch(err => console.error('[cv.worker] OpenCV load failed:', err));
 }
 
-function cornerPreservingSmooth(
-  points: Array<{x: number, y: number}>,
-  shapePerfection: number
-): Array<{x: number, y: number}> {
-  if (points.length < 4) return points;
-
-  // sp=0 (organic): high threshold → only sharp spikes preserved, curves smoothed freely
-  // sp=1 (geometric): low threshold → even gentle angles treated as corners, fully preserved
-  const cornerThresholdDeg = 120 - shapePerfection * 100; // 120° at 0 → 20° at 1.0
-  const cornerThresholdRad = (cornerThresholdDeg * Math.PI) / 180;
-
-  function angle(p0: {x:number,y:number}, p1: {x:number,y:number}, p2: {x:number,y:number}): number {
-    const ax = p0.x - p1.x, ay = p0.y - p1.y;
-    const bx = p2.x - p1.x, by = p2.y - p1.y;
-    const dot = ax*bx + ay*by;
-    const magA = Math.hypot(ax, ay), magB = Math.hypot(bx, by);
-    if (magA === 0 || magB === 0) return 0;
-    return Math.acos(Math.max(-1, Math.min(1, dot / (magA * magB))));
-  }
-
-  const n = points.length;
-  const isCorner = new Array(n).fill(false);
-  for (let i = 0; i < n; i++) {
-    const prev = points[(i - 1 + n) % n];
-    const curr = points[i];
-    const next = points[(i + 1) % n];
-    const bendAngle = Math.PI - angle(prev, curr, next);
-    if (bendAngle > cornerThresholdRad) isCorner[i] = true;
-  }
-
-  let pts = [...points];
-  for (let iter = 0; iter < 2; iter++) {
-    const newPts: typeof pts = [];
-    const n2 = pts.length;
-    for (let i = 0; i < n2; i++) {
-      const j = (i + 1) % n2;
-      if (isCorner[i % isCorner.length] || isCorner[j % isCorner.length]) {
-        newPts.push(pts[i]);
-      } else {
-        newPts.push({ x: 0.75*pts[i].x + 0.25*pts[j].x, y: 0.75*pts[i].y + 0.25*pts[j].y });
-        newPts.push({ x: 0.25*pts[i].x + 0.75*pts[j].x, y: 0.25*pts[i].y + 0.75*pts[j].y });
-      }
-    }
-    pts = newPts;
-  }
-
-  if (shapePerfection > 0.5) {
-    const snapStrength = (shapePerfection - 0.5) * 2;
-    pts = pts.map((p, i) => {
-      if (!isCorner[i % isCorner.length]) return p;
-      const prev = pts[(i - 1 + pts.length) % pts.length];
-      const next = pts[(i + 1) % pts.length];
-      const ax = p.x - prev.x, ay = p.y - prev.y;
-      const bx = next.x - p.x, by = next.y - p.y;
-      const angleDeg = Math.abs(Math.atan2(ay, ax) - Math.atan2(by, bx)) * 180 / Math.PI;
-      if (Math.abs(angleDeg - 90) < 20 || Math.abs(angleDeg - 270) < 20) {
-        const len = Math.hypot(ax, ay);
-        const snappedX = prev.x + Math.round(ax / len) * len;
-        const snappedY = prev.y + Math.round(ay / len) * len;
-        return {
-          x: p.x + (snappedX - p.x) * snapStrength,
-          y: p.y + (snappedY - p.y) * snapStrength,
-        };
-      }
-      return p;
-    });
-  }
-
-  return pts;
-}
-
 self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
   if (e.data.type !== 'PROCESS_IMAGE') return;
   const { imageData, settings } = e.data;
@@ -148,9 +77,20 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
 
     const binary = M(new _cv.Mat());
     if (settings.threshold === 'auto') {
-      // Otsu finds the paper/ink split in the darkness map automatically.
-      _cv.threshold(darkness, binary, 0, 255,
-        (_cv.THRESH_BINARY | _cv.THRESH_OTSU));
+      // Otsu finds the split between paper and ink in the darkness map.
+      // When ink covers < 0.5% of the image (thin/faint strokes) Otsu picks a
+      // threshold that is too high and only tiny bright spots pass.  Detect
+      // this case by checking the ink fraction, and fall back to 50% of the
+      // Otsu value so lighter strokes are also included.
+      const tempBin = M(new _cv.Mat());
+      const otsuVal = _cv.threshold(darkness, tempBin, 0, 255,
+        _cv.THRESH_BINARY | _cv.THRESH_OTSU);
+      if (_cv.countNonZero(tempBin) / imageArea < 0.005) {
+        _cv.threshold(darkness, binary,
+          Math.max(20, Math.round(otsuVal * 0.5)), 255, _cv.THRESH_BINARY);
+      } else {
+        tempBin.copyTo(binary);
+      }
     } else {
       // Manual: slider value is directly the darkness threshold (0–255).
       _cv.threshold(darkness, binary,
@@ -273,23 +213,50 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
     const cy_px = (Math.min(...primYs) + Math.max(...primYs)) / 2;
 
     function applySmoothing(rawPts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
-      let pts = [...rawPts];
+      if (rawPts.length < 3) return rawPts;
+      const n = rawPts.length;
 
-      // Stage 1: global Chaikin smoothing
-      for (let iter = 0; iter < settings.smoothing; iter++) {
-        const out: typeof pts = [];
-        const n = pts.length;
-        for (let i = 0; i < n; i++) {
-          const a = pts[i], b = pts[(i + 1) % n];
-          out.push({ x: 0.75*a.x + 0.25*b.x, y: 0.75*a.y + 0.25*b.y });
-          out.push({ x: 0.25*a.x + 0.75*b.x, y: 0.25*a.y + 0.75*b.y });
-        }
-        pts = out;
+      // Detect corners on the original approxPolyDP points — BEFORE any smoothing.
+      // This prevents Chaikin from rounding tight corners (e.g. flower indentations,
+      // letter corners) before corner-preservation can act.
+      // shapePerfection=0 → threshold 120°: preserve internal angles < 60°
+      // shapePerfection=1 → threshold 20°: preserve internal angles < 160°
+      const cornerThresh = ((120 - settings.shapePerfection * 100) * Math.PI) / 180;
+
+      function bendAngle(p0: {x:number,y:number}, p1: {x:number,y:number}, p2: {x:number,y:number}): number {
+        const ax = p0.x - p1.x, ay = p0.y - p1.y;
+        const bx = p2.x - p1.x, by = p2.y - p1.y;
+        const dot = ax*bx + ay*by;
+        const mag = Math.hypot(ax, ay) * Math.hypot(bx, by);
+        if (mag === 0) return 0;
+        return Math.PI - Math.acos(Math.max(-1, Math.min(1, dot / mag)));
       }
 
-      // Stage 2: corner-preserving shape perfection
-      if (settings.shapePerfection > 0) {
-        pts = cornerPreservingSmooth(pts, settings.shapePerfection);
+      // Maintain a parallel boolean array so corner flags survive Chaikin's
+      // variable-length output (corners emit 1 point, smooth segments emit 2).
+      let pts = [...rawPts];
+      let isCornerPts = rawPts.map((_, i) =>
+        bendAngle(rawPts[(i - 1 + n) % n], rawPts[i], rawPts[(i + 1) % n]) > cornerThresh
+      );
+
+      for (let iter = 0; iter < settings.smoothing; iter++) {
+        const out: typeof pts = [];
+        const outCorners: boolean[] = [];
+        const m = pts.length;
+        for (let i = 0; i < m; i++) {
+          const j = (i + 1) % m;
+          if (isCornerPts[i] || isCornerPts[j]) {
+            // Keep corner point exactly — do not subdivide this segment.
+            out.push(pts[i]);
+            outCorners.push(isCornerPts[i]);
+          } else {
+            out.push({ x: 0.75*pts[i].x + 0.25*pts[j].x, y: 0.75*pts[i].y + 0.25*pts[j].y });
+            out.push({ x: 0.25*pts[i].x + 0.75*pts[j].x, y: 0.25*pts[i].y + 0.75*pts[j].y });
+            outCorners.push(false, false);
+          }
+        }
+        pts = out;
+        isCornerPts = outCorners;
       }
 
       return pts;

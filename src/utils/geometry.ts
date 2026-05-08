@@ -14,9 +14,17 @@ export function buildProfileShape(profile: CutterProfile): THREE.Shape {
   return shape;
 }
 
-export function buildContourCurve(points: Array<{ x: number; y: number }>): THREE.CatmullRomCurve3 {
-  const vec3Points = points.map((p) => new THREE.Vector3(p.x, 0, p.y));
-  return new THREE.CatmullRomCurve3(vec3Points, true, 'catmullrom', 0.5);
+export function buildContourCurve(points: Array<{ x: number; y: number }>): THREE.CurvePath<THREE.Vector3> {
+  // Straight LineCurve3 segments so the 3D extrusion follows exactly the same
+  // polyline the 2D preview draws.  CatmullRomCurve3 added extra curvature at
+  // corners, making the 3D outline differ from the 2D preview.
+  const path = new THREE.CurvePath<THREE.Vector3>();
+  for (let i = 0; i < points.length; i++) {
+    const a = new THREE.Vector3(points[i].x, 0, points[i].y);
+    const b = new THREE.Vector3(points[(i + 1) % points.length].x, 0, points[(i + 1) % points.length].y);
+    path.add(new THREE.LineCurve3(a, b));
+  }
+  return path;
 }
 
 export function generateCutterGeometry(
@@ -26,7 +34,8 @@ export function generateCutterGeometry(
   const shape = buildProfileShape(profile);
   const curve = buildContourCurve(contour.points);
   const pathLength = curve.getLength();
-  const steps = Math.max(Math.round(pathLength / 0.5), 100);
+  // Need at least as many steps as polygon segments so each corner gets its own frame.
+  const steps = Math.max(contour.points.length, Math.round(pathLength / 0.5), 100);
 
   const geometry = new THREE.ExtrudeGeometry(shape, {
     extrudePath: curve,
