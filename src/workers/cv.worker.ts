@@ -88,17 +88,10 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
       const otsuVal = _cv.threshold(darkness, tempBin, 0, 255,
         _cv.THRESH_BINARY | _cv.THRESH_OTSU);
 
-      if (settings.expectedLoops !== 1) {
-        // Multi-loop: bias toward lower threshold so all visible loops are found.
-        const lowThresh = Math.max(15, Math.round(otsuVal * 0.35));
-        _cv.threshold(darkness, binary, lowThresh, 255, _cv.THRESH_BINARY);
-      } else if (_cv.countNonZero(tempBin) / imageArea < 0.005) {
-        // Single loop, very sparse ink: halve Otsu.
-        _cv.threshold(darkness, binary,
-          Math.max(20, Math.round(otsuVal * 0.5)), 255, _cv.THRESH_BINARY);
-      } else {
-        tempBin.copyTo(binary);
-      }
+      // Always start low: Otsu sits too high and misses dimmer shapes even for
+      // single-loop images. 35% of Otsu (min 15) reliably captures all ink.
+      const lowThresh = Math.max(15, Math.round(otsuVal * 0.35));
+      _cv.threshold(darkness, binary, lowThresh, 255, _cv.THRESH_BINARY);
     } else {
       // Manual: slider value is directly the darkness threshold (0–255).
       _cv.threshold(darkness, binary,
