@@ -77,15 +77,23 @@ self.onmessage = async (e: MessageEvent<CVWorkerMessage>) => {
 
     const binary = M(new _cv.Mat());
     if (settings.threshold === 'auto') {
-      // Otsu finds the split between paper and ink in the darkness map.
-      // When ink covers < 0.5% of the image (thin/faint strokes) Otsu picks a
-      // threshold that is too high and only tiny bright spots pass.  Detect
-      // this case by checking the ink fraction, and fall back to 50% of the
-      // Otsu value so lighter strokes are also included.
+      // Otsu finds the optimal split for the dominant (largest) shape, but
+      // consistently sits too high when multiple shapes are expected — secondary
+      // loops are lighter/smaller and fall below the Otsu cut.
+      // Strategy:
+      //   • Single loop (expectedLoops === 1): use Otsu; halve if ink < 0.5%.
+      //   • Multiple / all loops (≠ 1): start at 35% of Otsu so dimmer shapes
+      //     are captured, but stay ≥ 15 to avoid pure noise.
       const tempBin = M(new _cv.Mat());
       const otsuVal = _cv.threshold(darkness, tempBin, 0, 255,
         _cv.THRESH_BINARY | _cv.THRESH_OTSU);
-      if (_cv.countNonZero(tempBin) / imageArea < 0.005) {
+
+      if (settings.expectedLoops !== 1) {
+        // Multi-loop: bias toward lower threshold so all visible loops are found.
+        const lowThresh = Math.max(15, Math.round(otsuVal * 0.35));
+        _cv.threshold(darkness, binary, lowThresh, 255, _cv.THRESH_BINARY);
+      } else if (_cv.countNonZero(tempBin) / imageArea < 0.005) {
+        // Single loop, very sparse ink: halve Otsu.
         _cv.threshold(darkness, binary,
           Math.max(20, Math.round(otsuVal * 0.5)), 255, _cv.THRESH_BINARY);
       } else {
